@@ -1,0 +1,19 @@
+[package]
+name = "twfarmer"
+version = "0.1.0"
+edition = "2024"
+description = "Консольный клиент Twitch для баллов выбранных каналов"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+toml = "0.8"
+uuid = { version = "1", features = ["v4"] }
+futures-util = "0.3"
