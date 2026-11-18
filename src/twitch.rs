@@ -25,7 +25,10 @@ pub fn http_client() -> Result<Client> {
         .connect_timeout(Duration::from_secs(10))
         .gzip(true)
         .build()
-        .context("Не удалось создать HTTP-клиент")
+        .context(tr!(
+            "Could not create the HTTP client",
+            "Не удалось создать HTTP-клиент"
+        ))
 }
 
 pub fn check_status(status: StatusCode, operation: &str) -> Result<()> {
@@ -72,7 +75,11 @@ impl Twitch {
         let mut auth = auth::read(&auth_path)?;
         ensure!(
             auth.client_id == config.client_id,
-            "client_id изменился. Выполните twfarmer login."
+            "{}",
+            tf!(
+                "client_id changed. Run twfarmer login.",
+                "client_id изменился. Выполните twfarmer login."
+            )
         );
         let identity = auth::ensure_valid(&client, &mut auth, &auth_path).await?;
         auth::sync_identity(&mut auth, &identity, &auth_path)?;
@@ -104,15 +111,15 @@ impl Twitch {
             .send()
             .await
             .map_err(|e| e.without_url())
-            .context("Запрос Twitch GraphQL")?;
+            .context(tr!("Twitch GraphQL request", "Запрос Twitch GraphQL"))?;
         if response.status() == StatusCode::UNAUTHORIZED {
             return Err(SessionExpired.into());
         }
         check_status(response.status(), "Twitch GraphQL")?;
-        let body: Value = response
-            .json()
-            .await
-            .context("Неверный JSON Twitch GraphQL")?;
+        let body: Value = response.json().await.context(tr!(
+            "Invalid Twitch GraphQL JSON",
+            "Неверный JSON Twitch GraphQL"
+        ))?;
         gql_data(body)
     }
 
@@ -133,10 +140,13 @@ impl Twitch {
         let user = data
             .get("user")
             .filter(|u| !u.is_null())
-            .with_context(|| format!("Канал {login} не найден"))?;
+            .with_context(|| tf!("Channel {login} was not found", "Канал {login} не найден"))?;
         let id = user["id"]
             .as_str()
-            .context("Twitch не вернул ID канала")?
+            .context(tr!(
+                "Twitch did not return a channel ID",
+                "Twitch не вернул ID канала"
+            ))?
             .to_string();
         let broadcast_id = user
             .pointer("/stream/id")
@@ -173,11 +183,20 @@ impl Twitch {
         let result = data
             .get("claimCommunityPoints")
             .filter(|v| !v.is_null())
-            .context("Twitch не подтвердил получение бонуса")?;
+            .context(tr!(
+                "Twitch did not confirm the bonus claim",
+                "Twitch не подтвердил получение бонуса"
+            ))?;
         if result.get("error").is_some_and(|e| !e.is_null()) {
-            bail!("Twitch отклонил получение бонуса");
+            bail!(
+                "{}",
+                tf!(
+                    "Twitch rejected the bonus claim",
+                    "Twitch отклонил получение бонуса"
+                )
+            );
         }
-        // Empty data or a null mutation is never reported as a successful claim.
+        // A null mutation does not confirm a bonus claim.
         Ok(())
     }
 
@@ -188,8 +207,11 @@ impl Twitch {
             .send()
             .await
             .map_err(|e| e.without_url())
-            .context("Загрузка данных потока")?;
-        check_status(response.status(), "Загрузка данных потока")?;
+            .context(tr!("Loading stream data", "Загрузка данных потока"))?;
+        check_status(
+            response.status(),
+            tr!("Loading stream data", "Загрузка данных потока"),
+        )?;
         let final_url = response.url().clone();
         Ok((
             final_url,
@@ -197,7 +219,7 @@ impl Twitch {
                 .text()
                 .await
                 .map_err(|e| e.without_url())
-                .context("Чтение данных потока")?,
+                .context(tr!("Reading stream data", "Чтение данных потока"))?,
         ))
     }
 
@@ -213,7 +235,10 @@ impl Twitch {
         )?;
         let settings = re
             .find(&html)
-            .context("Не найден settings.js Twitch; внутренний API изменился")?
+            .context(tr!(
+                "Twitch settings.js was not found; the internal API changed",
+                "Не найден settings.js Twitch; внутренний API изменился"
+            ))?
             .as_str();
         let (_, text) = self.get_text(Url::parse(settings)?).await?;
         let url = tracking_endpoint(&text)?;
@@ -233,12 +258,14 @@ impl Twitch {
             )
             .await?;
         let token = &data["streamPlaybackAccessToken"];
-        let signature = token["signature"]
-            .as_str()
-            .context("Нет подписи доступа к потоку")?;
-        let value = token["value"]
-            .as_str()
-            .context("Нет токена доступа к потоку")?;
+        let signature = token["signature"].as_str().context(tr!(
+            "Missing stream access signature",
+            "Нет подписи доступа к потоку"
+        ))?;
+        let value = token["value"].as_str().context(tr!(
+            "Missing stream access token",
+            "Нет токена доступа к потоку"
+        ))?;
         let mut url = Url::parse(&format!(
             "https://usher.ttvnw.net/api/channel/hls/{}.m3u8",
             channel.login
@@ -251,7 +278,10 @@ impl Twitch {
             .append_pair("player", "twitchweb");
         let (base, playlist) = self.get_text(url).await?;
         Ok(Playback {
-            broadcast_id: channel.broadcast_id.clone().context("Канал не в эфире")?,
+            broadcast_id: channel
+                .broadcast_id
+                .clone()
+                .context(tr!("The channel is offline", "Канал не в эфире"))?,
             playlist: hls::lowest_variant(&base, &playlist)?,
             expires: Instant::now() + Duration::from_secs(240),
         })
@@ -266,20 +296,37 @@ impl Twitch {
             .send()
             .await
             .map_err(|e| e.without_url())
-            .context("Получение сегмента потока")?;
-        check_status(response.status(), "Сегмент потока")?;
-        // Consume one low-quality segment per tick without buffering the video in RAM.
+            .context(tr!(
+                "Fetching a stream segment",
+                "Получение сегмента потока"
+            ))?;
+        check_status(response.status(), tr!("Stream segment", "Сегмент потока"))?;
+        // Read one segment per tick; discard chunks instead of buffering video.
         let mut size = 0;
         while let Some(chunk) = response
             .chunk()
             .await
             .map_err(|e| e.without_url())
-            .context("Чтение сегмента")?
+            .context(tr!("Reading a segment", "Чтение сегмента"))?
         {
             size += chunk.len();
-            ensure!(size <= 16 * 1024 * 1024, "Сегмент потока превышает 16 МиБ");
+            ensure!(
+                size <= 16 * 1024 * 1024,
+                "{}",
+                tf!(
+                    "The stream segment exceeds 16 MiB",
+                    "Сегмент потока превышает 16 МиБ"
+                )
+            );
         }
-        ensure!(size > 0, "Twitch вернул пустой сегмент потока");
+        ensure!(
+            size > 0,
+            "{}",
+            tf!(
+                "Twitch returned an empty stream segment",
+                "Twitch вернул пустой сегмент потока"
+            )
+        );
         let payload = minute_watched_payload(channel, &self.identity.user_id)?;
         self.send_tracking(&payload).await?;
         Ok(())
@@ -288,7 +335,8 @@ impl Twitch {
     async fn send_tracking(&mut self, payload: &Value) -> Result<()> {
         let encoded = STANDARD.encode(serde_json::to_vec(payload)?);
         let endpoint = self.tracking_url().await?;
-        let operation = format!(
+        let operation = tf!(
+            "Watch event ({})",
             "Событие просмотра ({})",
             endpoint.host_str().unwrap_or("Twitch")
         );
@@ -321,37 +369,53 @@ struct TrackingSettings {
 }
 
 fn tracking_endpoint(script: &str) -> Result<Url> {
-    let start = script
-        .find('{')
-        .context("В settings.js Twitch нет настроек")?;
-    // The JSON object may be followed by a semicolon or additional JavaScript.
+    let start = script.find('{').context(tr!(
+        "Twitch settings.js contains no settings",
+        "В settings.js Twitch нет настроек"
+    ))?;
+    // Ignore JavaScript after the settings JSON.
     let settings = serde_json::Deserializer::from_str(&script[start..])
         .into_iter::<TrackingSettings>()
         .next()
-        .context("В settings.js Twitch нет настроек")?
-        .context("Не удалось разобрать настройки событий Twitch")?;
+        .context(tr!(
+            "Twitch settings.js contains no settings",
+            "В settings.js Twitch нет настроек"
+        ))?
+        .context(tr!(
+            "Could not parse Twitch event settings",
+            "Не удалось разобрать настройки событий Twitch"
+        ))?;
     let (key, value) = if settings.use_beacon_url {
         ("beacon_url", settings.beacon_url)
     } else {
         ("spade_url", settings.spade_url)
     };
-    let value = value.with_context(|| format!("В настройках Twitch отсутствует {key}"))?;
-    let url = Url::parse(&value).context("Неверный адрес событий Twitch")?;
+    let value = value.with_context(|| {
+        tf!(
+            "Twitch settings do not contain {key}",
+            "В настройках Twitch отсутствует {key}"
+        )
+    })?;
+    let url = Url::parse(&value).context(tr!(
+        "Invalid Twitch event URL",
+        "Неверный адрес событий Twitch"
+    ))?;
     ensure!(
         url.scheme() == "https"
             && url
                 .host_str()
                 .is_some_and(|h| h == "twitch.tv" || h.ends_with(".twitch.tv")),
-        "Неверный адрес событий Twitch"
+        "{}",
+        tf!("Invalid Twitch event URL", "Неверный адрес событий Twitch")
     );
     Ok(url)
 }
 
 pub fn parse_points(data: &Value) -> Result<Option<Points>> {
-    let community = data
-        .get("community")
-        .filter(|v| !v.is_null())
-        .context("Twitch не вернул канал в контексте баллов")?;
+    let community = data.get("community").filter(|v| !v.is_null()).context(tr!(
+        "Twitch did not return a channel in the points context",
+        "Twitch не вернул канал в контексте баллов"
+    ))?;
     if community
         .pointer("/channel/communityPointsSettings/isEnabled")
         .and_then(Value::as_bool)
@@ -362,10 +426,16 @@ pub fn parse_points(data: &Value) -> Result<Option<Points>> {
     let points = community
         .pointer("/channel/self/communityPoints")
         .filter(|v| !v.is_null())
-        .context("Twitch не вернул баланс: баллы недоступны для этой сессии")?;
-    Ok(Some(
-        serde_json::from_value(points.clone()).context("Формат баллов Twitch изменился")?,
-    ))
+        .context(tr!(
+            "Twitch did not return a balance: points are unavailable for this session",
+            "Twitch не вернул баланс: баллы недоступны для этой сессии"
+        ))?;
+    Ok(Some(serde_json::from_value(points.clone()).context(
+        tr!(
+            "The Twitch points format changed",
+            "Формат баллов Twitch изменился"
+        ),
+    )?))
 }
 
 fn gql_data(body: Value) -> Result<Value> {
@@ -384,14 +454,29 @@ fn gql_data(body: Value) -> Result<Value> {
             return Err(SessionExpired.into());
         }
         if message.contains("persistedquerynotfound") {
-            bail!("Запрос Twitch устарел (PersistedQueryNotFound); требуется обновление программы");
+            bail!(
+                "{}",
+                tf!(
+                    "The Twitch query is outdated (PersistedQueryNotFound); update the program",
+                    "Запрос Twitch устарел (PersistedQueryNotFound); требуется обновление программы"
+                )
+            );
         }
-        bail!("Twitch вернул ошибку GraphQL; внутренний API может быть недоступен или изменён");
+        bail!(
+            "{}",
+            tf!(
+                "Twitch returned a GraphQL error; the internal API may be unavailable or changed",
+                "Twitch вернул ошибку GraphQL; внутренний API может быть недоступен или изменён"
+            )
+        );
     }
     body.get("data")
         .filter(|v| !v.is_null())
         .cloned()
-        .context("Twitch не вернул данные GraphQL")
+        .context(tr!(
+            "Twitch did not return GraphQL data",
+            "Twitch не вернул данные GraphQL"
+        ))
 }
 
 #[cfg(test)]
@@ -458,7 +543,7 @@ mod tests {
             gql_data(json!({"data":{"user":null},"errors":[{"message":"PersistedQueryNotFound"}]}))
                 .unwrap_err()
                 .to_string()
-                .contains("устарел")
+                .contains("outdated")
         );
         assert!(
             gql_data(json!({"errors":[{"message":"Unauthorized"}]}))

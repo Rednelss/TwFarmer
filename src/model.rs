@@ -41,19 +41,20 @@ impl ChannelStatus {
     }
     pub fn label(&self) -> String {
         match self {
-            Self::Online => "Онлайн".into(),
-            Self::Idle => "Остановлен".into(),
-            Self::Checking => "Проверка".into(),
-            Self::Offline => "Офлайн".into(),
-            Self::Queued => "В очереди".into(),
-            Self::Starting => "Запуск".into(),
-            Self::Watching => "Фарм".into(),
-            Self::Disabled => "Баллы отключены".into(),
-            Self::Retry(at) => format!(
+            Self::Online => tr!("Online", "Онлайн").into(),
+            Self::Idle => tr!("Stopped", "Остановлен").into(),
+            Self::Checking => tr!("Checking", "Проверка").into(),
+            Self::Offline => tr!("Offline", "Офлайн").into(),
+            Self::Queued => tr!("Queued", "В очереди").into(),
+            Self::Starting => tr!("Starting", "Запуск").into(),
+            Self::Watching => tr!("Farming", "Фарм").into(),
+            Self::Disabled => tr!("Points disabled", "Баллы отключены").into(),
+            Self::Retry(at) => tf!(
+                "Retry in {}s",
                 "Повтор {}с",
                 at.saturating_duration_since(Instant::now()).as_secs()
             ),
-            Self::Error => "Ошибка".into(),
+            Self::Error => tr!("Error", "Ошибка").into(),
         }
     }
 }

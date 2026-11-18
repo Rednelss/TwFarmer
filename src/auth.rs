@@ -48,14 +48,27 @@ struct Tokens {
 pub struct SessionExpired;
 impl std::fmt::Display for SessionExpired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Сессия Twitch недействительна. Обновите вход в аккаунт.")
+        write!(
+            f,
+            "{}",
+            tf!(
+                "The Twitch session is invalid. Sign in to the account again.",
+                "Сессия Twitch недействительна. Обновите вход в аккаунт."
+            )
+        )
     }
 }
 impl std::error::Error for SessionExpired {}
 
 pub fn read(path: &Path) -> Result<Auth> {
-    let bytes = fs::read(path).context("Нет сохранённой сессии. Добавьте аккаунт.")?;
-    serde_json::from_slice(&bytes).context("Файл сессии повреждён. Обновите вход в аккаунт.")
+    let bytes = fs::read(path).context(tr!(
+        "No saved session. Add an account.",
+        "Нет сохранённой сессии. Добавьте аккаунт."
+    ))?;
+    serde_json::from_slice(&bytes).context(tr!(
+        "The session file is corrupted. Sign in to the account again.",
+        "Файл сессии повреждён. Обновите вход в аккаунт."
+    ))
 }
 
 pub fn save(path: &Path, auth: &Auth) -> Result<()> {
@@ -64,12 +77,21 @@ pub fn save(path: &Path, auth: &Auth) -> Result<()> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     // tempfile creates files with mode 0600 on Unix; rename replaces atomically.
-    let mut file =
-        tempfile::NamedTempFile::new_in(parent).context("Не удалось создать файл сессии")?;
+    let mut file = tempfile::NamedTempFile::new_in(parent).context(tr!(
+        "Could not create the session file",
+        "Не удалось создать файл сессии"
+    ))?;
     file.write_all(&serde_json::to_vec(auth)?)?;
     file.as_file().sync_all()?;
-    file.persist(path)
-        .map_err(|_| anyhow::anyhow!("Не удалось сохранить файл сессии"))?;
+    file.persist(path).map_err(|_| {
+        anyhow::anyhow!(
+            "{}",
+            tf!(
+                "Could not save the session file",
+                "Не удалось сохранить файл сессии"
+            )
+        )
+    })?;
     Ok(())
 }
 
@@ -95,22 +117,36 @@ async fn validate_at(client: &Client, auth: &Auth, endpoint: &str) -> Result<Ide
         .send()
         .await
         .map_err(|e| e.without_url())
-        .context("Проверка сессии Twitch")?;
+        .context(tr!(
+            "Validating the Twitch session",
+            "Проверка сессии Twitch"
+        ))?;
     if response.status() == StatusCode::UNAUTHORIZED {
         return Err(SessionExpired.into());
     }
-    crate::twitch::check_status(response.status(), "Проверка сессии")?;
-    let identity: Identity = response
-        .json()
-        .await
-        .context("Неверный ответ проверки сессии")?;
+    crate::twitch::check_status(
+        response.status(),
+        tr!("Session validation", "Проверка сессии"),
+    )?;
+    let identity: Identity = response.json().await.context(tr!(
+        "Invalid session validation response",
+        "Неверный ответ проверки сессии"
+    ))?;
     ensure!(
         identity.client_id == auth.client_id,
-        "client_id токена не совпадает с сохранённой сессией"
+        "{}",
+        tf!(
+            "The token client_id does not match the saved session",
+            "client_id токена не совпадает с сохранённой сессией"
+        )
     );
     ensure!(
         !identity.user_id.is_empty() && !identity.login.is_empty(),
-        "Нужен пользовательский токен Twitch"
+        "{}",
+        tf!(
+            "A Twitch user token is required",
+            "Нужен пользовательский токен Twitch"
+        )
     );
     Ok(identity)
 }
@@ -127,9 +163,8 @@ async fn ensure_valid_at(
     token_endpoint: &str,
 ) -> Result<Identity> {
     match validate_at(client, auth, validate_endpoint).await {
-        // TV tokens can report zero lifetime while /validate confirms they are valid.
-        // Keep checking them periodically; refresh only after a 401 or a positive
-        // lifetime below the refresh threshold.
+        // TV tokens with expires_in=0 can still pass validation.
+        // Refresh after a 401 or a positive lifetime below the threshold.
         Ok(identity) if identity.expires_in == 0 || identity.expires_in > 300 => Ok(identity),
         Ok(identity) if auth.refresh_token.is_none() => Ok(identity),
         Ok(_) => {
@@ -156,18 +191,21 @@ async fn refresh_at(client: &Client, auth: &mut Auth, path: &Path, endpoint: &st
         .send()
         .await
         .map_err(|e| e.without_url())
-        .context("Обновление сессии")?;
+        .context(tr!("Session refresh", "Обновление сессии"))?;
     if matches!(
         response.status(),
         StatusCode::BAD_REQUEST | StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
     ) {
         return Err(SessionExpired.into());
     }
-    crate::twitch::check_status(response.status(), "Обновление сессии")?;
-    let tokens: Tokens = response
-        .json()
-        .await
-        .context("Неверный ответ обновления сессии")?;
+    crate::twitch::check_status(
+        response.status(),
+        tr!("Session refresh", "Обновление сессии"),
+    )?;
+    let tokens: Tokens = response.json().await.context(tr!(
+        "Invalid session refresh response",
+        "Неверный ответ обновления сессии"
+    ))?;
     auth.access_token = tokens.access_token;
     if tokens.refresh_token.is_some() {
         auth.refresh_token = tokens.refresh_token;
@@ -177,9 +215,24 @@ async fn refresh_at(client: &Client, auth: &mut Auth, path: &Path, endpoint: &st
 
 pub async fn authorize(client: &Client, config: &Config) -> Result<(Auth, Identity)> {
     authorize_with(client, config, |uri, code| {
-        println!("Откройте в браузере: {uri}");
-        println!("Код входа: {code}. Подтвердите вход на сайте Twitch.");
-        println!("Ожидаю подтверждение; Ctrl+C — отмена.");
+        println!(
+            "{}",
+            tf!("Open in your browser: {uri}", "Откройте в браузере: {uri}")
+        );
+        println!(
+            "{}",
+            tf!(
+                "Login code: {code}. Confirm sign-in on the Twitch website.",
+                "Код входа: {code}. Подтвердите вход на сайте Twitch."
+            )
+        );
+        println!(
+            "{}",
+            tf!(
+                "Waiting for confirmation; Ctrl+C to cancel.",
+                "Ожидаю подтверждение; Ctrl+C для отмены."
+            )
+        );
     })
     .await
 }
@@ -203,19 +256,26 @@ pub async fn authorize_with(
         .send()
         .await
         .map_err(|e| e.without_url())
-        .context("Запрос кода входа")?;
+        .context(tr!("Requesting a login code", "Запрос кода входа"))?;
     crate::twitch::check_status(
         response.status(),
-        "Код входа: проверьте client_id и oauth_scopes",
+        tr!(
+            "Login code: check client_id and oauth_scopes",
+            "Код входа: проверьте client_id и oauth_scopes"
+        ),
     )?;
-    let device: Device = response
-        .json()
-        .await
-        .context("Неверный ответ запроса кода")?;
+    let device: Device = response.json().await.context(tr!(
+        "Invalid login code response",
+        "Неверный ответ запроса кода"
+    ))?;
     let uri = reqwest::Url::parse(&device.verification_uri)?;
     ensure!(
         uri.scheme() == "https" && matches!(uri.host_str(), Some("twitch.tv" | "www.twitch.tv")),
-        "Неверный адрес авторизации Twitch"
+        "{}",
+        tf!(
+            "Invalid Twitch authorization URL",
+            "Неверный адрес авторизации Twitch"
+        )
     );
     show(device.verification_uri.clone(), device.user_code.clone());
     let deadline = Instant::now() + Duration::from_secs(device.expires_in);
@@ -224,12 +284,20 @@ pub async fn authorize_with(
         let remaining = deadline.saturating_duration_since(Instant::now());
         ensure!(
             !remaining.is_zero(),
-            "Код истёк. Выполните twfarmer login ещё раз."
+            "{}",
+            tf!(
+                "The code expired. Run twfarmer login again.",
+                "Код истёк. Выполните twfarmer login ещё раз."
+            )
         );
         sleep(Duration::from_secs(interval).min(remaining)).await;
         ensure!(
             Instant::now() < deadline,
-            "Код истёк. Выполните twfarmer login ещё раз."
+            "{}",
+            tf!(
+                "The code expired. Run twfarmer login again.",
+                "Код истёк. Выполните twfarmer login ещё раз."
+            )
         );
         let response = client
             .post(TOKEN)
@@ -244,10 +312,13 @@ pub async fn authorize_with(
             .send()
             .await
             .map_err(|e| e.without_url())
-            .context("Ожидание входа")?;
+            .context(tr!("Waiting for sign-in", "Ожидание входа"))?;
         let status = response.status();
         if status.is_success() {
-            let tokens: Tokens = response.json().await.context("Неверный ответ входа")?;
+            let tokens: Tokens = response
+                .json()
+                .await
+                .context(tr!("Invalid sign-in response", "Неверный ответ входа"))?;
             let mut auth = Auth {
                 access_token: tokens.access_token,
                 refresh_token: tokens.refresh_token,
@@ -265,17 +336,35 @@ pub async fn authorize_with(
             interval = (interval + 5).min(60);
             continue;
         }
-        let body: serde_json::Value = response
-            .json()
-            .await
-            .context("Неверный ответ ожидания входа")?;
+        let body: serde_json::Value = response.json().await.context(tr!(
+            "Invalid sign-in polling response",
+            "Неверный ответ ожидания входа"
+        ))?;
         match poll_action(&body) {
             Poll::Pending => {}
             Poll::Slower => interval = (interval + 5).min(60),
-            Poll::Denied => bail!("Вход отклонён на сайте Twitch"),
-            Poll::Expired => bail!("Код истёк. Выполните twfarmer login ещё раз."),
+            Poll::Denied => bail!(
+                "{}",
+                tf!(
+                    "Sign-in was declined on the Twitch website",
+                    "Вход отклонён на сайте Twitch"
+                )
+            ),
+            Poll::Expired => bail!(
+                "{}",
+                tf!(
+                    "The code expired. Run twfarmer login again.",
+                    "Код истёк. Выполните twfarmer login ещё раз."
+                )
+            ),
             Poll::Unknown => {
-                bail!("Twitch отклонил вход (HTTP {status}); проверьте client_id и oauth_scopes")
+                bail!(
+                    "{}",
+                    tf!(
+                        "Twitch rejected sign-in (HTTP {status}); check client_id and oauth_scopes",
+                        "Twitch отклонил вход (HTTP {status}); проверьте client_id и oauth_scopes"
+                    )
+                )
             }
         }
     }

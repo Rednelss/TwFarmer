@@ -18,7 +18,7 @@ TARGETS = {
     'x86_64-pc-windows-msvc',
     'aarch64-apple-darwin',
 }
-PUBLIC_FILES = ('README.md', 'LICENSE', 'CHANGELOG.md', 'twfarmer.example.toml')
+PUBLIC_FILES = ('README.md', 'README.ru.md', 'LICENSE', 'CHANGELOG.md', 'CHANGELOG.ru.md', 'twfarmer.example.toml')
 
 
 def copy_public(source: Path, destination: Path) -> None:

@@ -1,5 +1,5 @@
 [Unit]
-Description=TwFarmer — Twitch channel points for saved accounts
+Description=TwFarmer: Twitch channel points for saved accounts
 After=network-online.target
 
 [Service]

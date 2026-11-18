@@ -1,20 +1,25 @@
 # TwFarmer
 
-Консольная программа на Rust для просмотра Twitch и сбора доступных бонусных баллов
-с нескольких аккаунтов. Аккаунты называются по их логинам Twitch; отдельные имена
-при добавлении придумывать не нужно.
+**English** | [Русский](README.ru.md)
 
-## Установка и запуск
+A Rust terminal application for Twitch channel points farming and claiming
+available bonuses with multiple accounts. Accounts use their Twitch logins;
+you do not need to invent separate profile names.
 
-Готовые архивы доступны на странице
+## Installation
+
+Download an archive for your system from
 [GitHub Releases](https://github.com/Rednelss/TwFarmer/releases).
-Выберите Linux x86_64, Windows x86_64 или macOS Apple Silicon, распакуйте архив
-и запустите `twfarmer` (`twfarmer.exe` на Windows) из распакованной папки.
-Linux-сборка из GitHub Actions требует glibc 2.35 или новее.
-Для проверки скачанного архива сравните его SHA-256 с файлом `SHA256SUMS` релиза;
-на Linux: `sha256sum --ignore-missing --check SHA256SUMS`.
+Extract it and run `twfarmer` (`twfarmer.exe` on Windows) from the extracted folder.
+Release builds cover Linux x86_64, Windows x86_64, and macOS Apple Silicon.
+The GitHub Actions Linux build requires glibc 2.35 or newer.
+Compare the archive's SHA-256 with `SHA256SUMS` from the release. On Linux:
 
-Для сборки из исходников нужны Rust 1.89+ и Cargo:
+```bash
+sha256sum --ignore-missing --check SHA256SUMS
+```
+
+To build from source, install Rust 1.89+ and Cargo:
 
 ```bash
 git clone https://github.com/Rednelss/TwFarmer.git
@@ -24,133 +29,155 @@ cd target/release
 ./twfarmer
 ```
 
-Откроется меню управления. Если настройки и сессии уже есть, запускайте программу
-из того же каталога, что и раньше. Старые файлы сессий читаются автоматически;
-личные списки с прежними обозначениями переводятся на реальные логины Twitch.
+The management menu opens. Complete the first setup in the interface: add an
+account, set shared channels, select accounts, and start farming.
+Sign-in shows a URL and a device code. Confirm it on the Twitch website using
+the intended account. Passwords and 2FA are entered on Twitch, and the login
+appears in the program automatically after confirmation.
 
-Первый запуск можно настроить полностью через интерфейс: добавить аккаунт,
-ввести общие каналы, выбрать аккаунты и запустить фарм.
-При авторизации интерфейс показывает ссылку и код. Подтвердите вход на сайте Twitch
-под нужным аккаунтом; после подтверждения его логин появится автоматически.
-Пароль и 2FA вводятся на сайте Twitch.
+Keep using the same working directory or `--config` path for existing settings.
+Legacy session files are read automatically; personal channel lists using old
+profile aliases are migrated to Twitch logins.
 
-## Управление через интерфейс
+## Language
 
-`m` или `F1` открывает меню, `↑/↓` выбирает пункт, `Enter` выполняет,
-`Esc` закрывает форму или отменяет вход. Все операции доступны в меню:
-
-- Запуск и остановка фарма выбранных аккаунтов.
-- Проверка балансов без просмотра и получения бонусов.
-- Выбор аккаунтов для запуска: пробел переключает выбор, `a` выбирает все,
-  `n` снимает выбор, `Enter` сохраняет, `t` применяет только на текущий запуск.
-- Добавление аккаунта, обновление входа и удаление локальной сессии.
-- Общие каналы, личные каналы аккаунта и возврат к общему списку.
-- Временный список каналов для текущего запуска.
-- Настройки фарма, открытие другого файла конфигурации или создание нового.
-- Переключение между таблицей и журналом, помощь и выход.
-
-В формах каналов принимаются логины или ссылки Twitch через пробел/запятую.
-Пустой личный список возвращает аккаунт к общему. Пустой временный список
-возвращает сохранённые списки. В формах работают `←/→`, `Home/End`,
-`Backspace/Delete`, вставка текста и `Ctrl+U` для очистки.
-В настройках `Tab` или `↑/↓` переключают поля.
-
-Общие и личные каналы, настройки и выбор аккаунтов сохраняются.
-Временные каналы действуют на все выбранные аккаунты только в текущем процессе
-и имеют приоритет над общими и личными списками.
-Изменение настроек во время фарма перезапускает выбранные аккаунты с новыми
-параметрами; накопленные показатели панели сохраняются.
-Проверка балансов без фарма останавливает просмотр. Добавление аккаунта
-показывает код, пока остальные аккаунты продолжают работать.
-
-На главном экране:
-
-- `s` — запустить, `x` — остановить, `a` — добавить аккаунт, `c` — общие каналы.
-- `↑/↓` или `j/k` — выбранный канал, `Tab` — фильтр аккаунтов.
-- `PgUp/PgDn` — прокрутка, `l` — журнал.
-- `q` или `Ctrl+C` — выйти.
-
-Каналы сортируются по состоянию: фарм, запуск, повтор, онлайн, очередь, проверка, остановленные, ошибки, отключённые баллы, офлайн. Внутри одного состояния сохраняется исходный порядок. Выбранная строка остаётся на том же канале при перемещении. Приоритет просмотра берётся из настроек.
-
-Панель обновляется каждые 250 мс. Видны баланс, изменение за текущую сессию
-программы, бонусы, состояние канала и ошибки. На широком экране дополнительно
-показаны активное время и возраст баланса.
-Выбранная строка показывает подробности и время последнего успешного просмотра.
-Успешное обращение к потоку само по себе не подтверждает начисление баллов.
-
-Каждый аккаунт работает независимо и смотрит до двух каналов одновременно.
-Ошибка одного аккаунта не останавливает другие. Порядок каналов задаёт приоритет;
-при завершении эфира выбирается следующий подходящий онлайн-канал.
-
-## Команды
-
-Команды сохранены для скриптов. Везде используются реальные логины Twitch.
+English is the default. Open the menu with `m` / `F1`, select **Language / Язык**,
+choose **English** or **Русский**, and press `Enter`. The choice is saved in the
+configuration's `language` field and takes effect immediately. Changing language
+with this menu item does not restart farming.
 
 ```bash
-./twfarmer                                      # меню управления
-./twfarmer ui                                   # то же
-./twfarmer login                                # добавить / обновить аккаунт
-./twfarmer login --account twitch_user               # обновить вход именно twitch_user
-./twfarmer accounts add                         # добавить без отдельного имени
-./twfarmer accounts add welovegames lizabaktt    # добавить и задать личные каналы
+./twfarmer language en                 # save English
+./twfarmer language ru                 # save Russian
+./twfarmer language                    # show the saved language
+./twfarmer settings set --language ru  # the same choice through settings
+./twfarmer --lang ru --help            # Russian for this command only
+./twfarmer --lang en run               # English for this run only
+```
+
+`--lang` overrides the saved language without changing the configuration file.
+Selecting a different language in the interface saves and applies that choice.
+Command names, configuration keys, and Twitch logins are the same in both languages.
+The interface, help, sign-in messages, and new log entries use the chosen language;
+existing log entries keep their original text. Old configuration files without
+`language` default to English.
+
+## Terminal interface
+
+Press `m` or `F1` to open the menu, `↑/↓` to select, `Enter` to apply, and
+`Esc` to close a form or cancel sign-in. The menu provides:
+
+- Start and stop farming, or check balances without watching or claiming bonuses.
+- Select accounts: Space toggles one, `a` selects all, `n` selects none,
+  `Enter` saves, and `t` applies the selection for this run only.
+- Add accounts, renew sign-in, and remove local sessions.
+- Edit shared channels, personal channels, or restore the shared list for an account.
+- Set temporary channels for the current process.
+- Edit farming settings, open a configuration, or create a new one.
+- Choose the language, switch between the table and log, view help, and quit.
+
+Channel forms accept Twitch logins or URLs separated by spaces or commas.
+An empty personal list uses the shared list. An empty temporary list restores
+saved lists. Forms support `←/→`, `Home/End`, `Backspace/Delete`, paste, and
+`Ctrl+U` to clear input. Use `Tab` or `↑/↓` between settings fields.
+
+Shared and personal channels, settings, and the account selection are saved.
+Temporary channels apply to all selected accounts in the current process and
+override their saved lists. Changing farming settings restarts selected accounts
+with the new settings while preserving dashboard totals.
+Checking balances stops watching. Other accounts continue running during sign-in.
+
+Dashboard shortcuts:
+
+- `s`: start; `x`: stop; `a`: add an account; `c`: shared channels.
+- `↑/↓` or `j/k`: select a channel; `Tab`: filter by account.
+- `PgUp/PgDn`: scroll; `l`: toggle the log.
+- `q` or `Ctrl+C`: quit.
+
+Channels are sorted by state: farming, starting, retrying, online, queued,
+checking, stopped, errors, points disabled, and offline. Within the same state,
+the configured order is preserved. Selection follows a channel when its row
+moves. Watching priority always follows configuration order.
+
+The dashboard updates every 250 ms and shows balances, balance changes for this
+process, bonuses, states, and errors. Wide terminals also show active time and
+the age of the balance. Channel details show the last successful watch request.
+A successful stream request does not itself confirm that points were awarded.
+
+Each account runs independently and watches up to two channels concurrently.
+Failure of one account does not stop the others. When a stream ends, the next
+eligible online channel is selected in priority order.
+
+## Commands
+
+Commands support scripts and use Twitch logins as account names:
+
+```bash
+./twfarmer                                     # management menu
+./twfarmer ui                                  # same interface
+./twfarmer login                               # add or renew an account
+./twfarmer login --account twitch_user          # renew this account
+./twfarmer accounts add                        # no separate profile name
+./twfarmer accounts add welovegames lizabaktt   # add with personal channels
 ./twfarmer accounts list
 ./twfarmer channels welovegames betboom_cs_ru
 ./twfarmer accounts channels twitch_user lizabaktt
-./twfarmer accounts channels twitch_user             # вернуть общий список
-./twfarmer run                                  # фарм и интерфейс
+./twfarmer accounts channels twitch_user        # restore the shared list
+./twfarmer run                                 # farming and interface
 ./twfarmer run --account twitch_user,another_login
-./twfarmer run --account twitch_user welovegames      # временные каналы
-./twfarmer run --no-ui                           # обычный журнал
+./twfarmer run --account twitch_user welovegames # temporary channels
+./twfarmer run --no-ui                          # plain log
 ./twfarmer status --account twitch_user
 ./twfarmer accounts remove twitch_user
 ./twfarmer logout --account twitch_user
-./twfarmer --config /полный/путь/settings.toml
+./twfarmer --config /absolute/path/settings.toml
 ```
 
-`run` без выбора использует сохранённый выбор аккаунтов; если выбора ещё нет —
-все сохранённые аккаунты. Явный `--account` меняет выбор только для запуска.
-`run CHANNELS` меняет списки только на текущий запуск.
-При перенаправлении вывода программа использует обычный журнал.
-`init CHANNELS` создаёт настройки и не перезаписывает существующий файл.
-`logout` без логина допустим, если сохранён только один аккаунт.
+`run` uses the saved account selection, or all saved accounts if no selection
+has been saved. `--account` overrides the selection only for that run.
+`run CHANNELS` overrides channel lists only for the current process.
+Redirected output uses a plain log. `init CHANNELS` creates settings without
+overwriting an existing file. `logout` without a login requires exactly one
+saved account.
 
-Удаление локальной сессии не отзывает доступ на Twitch; для этого есть
-https://www.twitch.tv/settings/connections.
+Removing a local session does not revoke Twitch access. Manage authorized
+applications at https://www.twitch.tv/settings/connections.
 
-## Соответствие меню и команд
+## Menu and command reference
 
-| Действие в интерфейсе | Команда |
+| Interface action | Command |
 | --- | --- |
-| Запустить фарм | `run`; `start` управляет уже открытой программой |
-| Запустить готовые сессии без интерфейса | `daemon` (псевдоним `service`) |
-| Остановить фарм | `stop` |
-| Проверить балансы | `status --account LOGIN` |
-| Сохранить выбор аккаунтов, Enter | `accounts select LOGIN1 LOGIN2` |
-| Снять выбор всех аккаунтов | `accounts select` |
-| Выбрать все аккаунты | `accounts select --all` |
-| Временный выбор аккаунтов, t | `run --account LOGIN` или `start --account LOGIN` |
-| Добавить аккаунт | `login` или `accounts add` |
-| Обновить вход | `login --account LOGIN` |
-| Удалить аккаунт и его настройки | `accounts remove LOGIN` или `logout --account LOGIN` |
-| Показать списки аккаунтов | `accounts list` |
-| Общие каналы | `channels CHANNELS` |
-| Очистить общие каналы | `channels --clear` |
-| Личные каналы | `accounts channels LOGIN CHANNELS` |
-| Вернуть общий список | `accounts channels LOGIN` |
-| Временные каналы | `run CHANNELS` или `start CHANNELS` |
-| Убрать временные каналы | `start` без каналов |
-| Настройки | `settings show`, `settings set OPTIONS` |
-| Открыть конфигурацию | `--config PATH ui` |
-| Создать конфигурацию, в том числе пустую | `--config PATH init [CHANNELS]` |
-| Журнал вместо таблицы | `ui --journal`, `run --journal`, `journal` |
-| Вернуться к таблице | `journal --enabled false` |
-| Переключиться на обычный журнал без интерфейса | `run --no-ui` |
-| Перечитать настройки | `reload` |
-| Помощь / версия | `--help`, `--version` |
-| Закрыть программу | `quit`, Ctrl+C |
+| Start farming | `run`; `start` controls an already running program |
+| Start prepared sessions without the interface | `daemon` (alias: `service`) |
+| Stop farming | `stop` |
+| Check balances | `status --account LOGIN` |
+| Save account selection, Enter | `accounts select LOGIN1 LOGIN2` |
+| Clear account selection | `accounts select` |
+| Select all accounts | `accounts select --all` |
+| Temporary account selection, t | `run --account LOGIN` or `start --account LOGIN` |
+| Add an account | `login` or `accounts add` |
+| Renew sign-in | `login --account LOGIN` |
+| Remove an account and its settings | `accounts remove LOGIN` or `logout --account LOGIN` |
+| List accounts | `accounts list` |
+| Shared channels | `channels CHANNELS` |
+| Clear shared channels | `channels --clear` |
+| Personal channels | `accounts channels LOGIN CHANNELS` |
+| Use shared channels | `accounts channels LOGIN` |
+| Temporary channels | `run CHANNELS` or `start CHANNELS` |
+| Clear temporary channels | `start` without channels |
+| Settings | `settings show`, `settings set OPTIONS` |
+| Open a configuration | `--config PATH ui` |
+| Create a configuration, including an empty one | `--config PATH init [CHANNELS]` |
+| Log instead of table | `ui --journal`, `run --journal`, `journal` |
+| Restore table | `journal --enabled false` |
+| Plain log | `run --no-ui` |
+| Reload settings | `reload` |
+| Language | `language en`, `language ru`, `settings set --language en` |
+| Help / version | `--help`, `--version` |
+| Close program | `quit`, Ctrl+C |
 
-`start`, `stop`, `reload`, `journal` и `quit` обращаются к запущенной программе
-для того же пути конфигурации. Пример — из второго терминала:
+`start`, `stop`, `reload`, `journal`, and `quit` connect to the running program
+using the same configuration path. From another terminal:
 
 ```bash
 ./twfarmer settings set --max-channels 1 --claim-bonus false
@@ -161,39 +188,39 @@ https://www.twitch.tv/settings/connections.
 ./twfarmer quit
 ```
 
-Изменения каналов, настроек и сохранённого выбора через команды автоматически
-применяются в открытой программе. Временный выбор и списки не записываются на диск.
-`settings set` поддерживает `--max-channels`, `--poll-interval-seconds`,
-`--watch-interval-seconds`, `--claim-bonus true|false`, `--client-id`
-и `--oauth-scopes "user_read"`. Пустая строка очищает scopes.
+Commands that change channels, settings, or the saved account selection apply
+those changes to the running program. Temporary lists and selections are not
+written to disk. `settings set` accepts `--max-channels`,
+`--poll-interval-seconds`, `--watch-interval-seconds`, `--claim-bonus true|false`,
+`--client-id`, `--language en|ru`, and `--oauth-scopes "user_read"`.
+An empty scopes string clears the list.
 
-Меню «Обычный журнал» освобождает экран и выключает управление клавишами;
-фарм продолжает работать. В интерактивном терминале `journal` снова открывает
-интерфейс. Одновременно запускается один экземпляр для каждого пути конфигурации.
-Файлы `*.control.json` и `*.control.lock` служат локальному управлению и исключены
-из Git; адрес управления содержит отдельный случайный ключ, а не токен Twitch.
+The plain-log menu action releases the dashboard and disables keyboard control;
+farming continues. `journal` restores the interface in an interactive terminal.
+One instance can run per configuration path. `*.control.json` and
+`*.control.lock` are excluded from Git. The local control address uses a separate
+random key, not a Twitch token.
 
-## Запуск через systemd
+## systemd
 
-Для запуска только уже настроенных аккаунтов:
+Start only already configured accounts and sessions:
 
 ```bash
-./twfarmer --config /полный/путь/twfarmer.toml daemon
+./twfarmer --config /absolute/path/twfarmer.toml daemon
 ```
 
-`daemon` всегда работает без интерфейса и чтения stdin, даже в обычном терминале.
-Он требует существующую конфигурацию и сохранённые сессии: при отсутствии настроек,
-аккаунтов или каналов завершится с ошибкой, которую видно в журнале. Новая авторизация
-не запускается. Действующие сессии проверяются и обновляются как при обычном фарме;
-если нужен повторный вход, выполните `login` отдельно.
-Используется `enabled_accounts` из конфигурации, а при отсутствии выбора — все
-сохранённые аккаунты. Можно ограничить запуск: `daemon --account LOGIN1,LOGIN2`.
-Каналы берутся из общих и личных списков конфигурации. `SIGTERM` и `Ctrl+C`
-завершают работу с кодом 0 и освобождают блокировку экземпляра.
+`daemon` never opens the interface or reads stdin. It requires an existing
+configuration, saved sessions, selected accounts, and configured channels.
+Missing setup produces an error in the log. It does not start device sign-in.
+Saved sessions are validated and refreshed as usual; run `login` separately
+if an account needs to sign in again.
+It uses `enabled_accounts`, or all saved accounts when that selection is absent.
+Use `daemon --account LOGIN1,LOGIN2` to override it. Channels come from saved
+shared and personal lists. Language follows the saved configuration or `--lang`.
+`SIGTERM` and `Ctrl+C` exit with code 0 and release the instance lock.
 
-Готовый пользовательский unit — `packaging/twfarmer.service`. Он использует
-бинарник `~/.local/bin/twfarmer` и конфигурацию
-`~/.config/twfarmer/twfarmer.toml`. Установка из распакованного Linux-архива:
+The user unit `packaging/twfarmer.service` uses `~/.local/bin/twfarmer` and
+`~/.config/twfarmer/twfarmer.toml`. From the extracted Linux archive:
 
 ```bash
 install -Dm755 twfarmer ~/.local/bin/twfarmer
@@ -202,96 +229,88 @@ cp packaging/twfarmer.service ~/.config/systemd/user/twfarmer.service
 ~/.local/bin/twfarmer --config "$HOME/.config/twfarmer/twfarmer.toml" ui
 ```
 
-В интерфейсе сохраните аккаунты и каналы, затем закройте программу.
-Если настройка уже выполнена в другом каталоге, предварительно перенесите
-`twfarmer.toml`, каталог `twfarmer.toml.accounts` и старый
-`twfarmer.toml.auth.json`, если он есть, в `~/.config/twfarmer`.
-Сохраняйте имена файлов и права доступа. Для сборки из исходников в команде
-`install` используйте `target/release/twfarmer` вместо `twfarmer`.
-
-Включите службу:
+Save accounts and channels in the interface, then close the program.
+For existing setup, first move `twfarmer.toml`, the `twfarmer.toml.accounts`
+directory, and any legacy `twfarmer.toml.auth.json` to `~/.config/twfarmer`.
+Keep their names and permissions. For a source build, use
+`target/release/twfarmer` instead of `twfarmer` in the `install` command.
 
 ```bash
 systemctl --user daemon-reload
 systemctl --user enable --now twfarmer.service
-```
-
-Управление службой:
-
-```bash
 systemctl --user status twfarmer.service
 journalctl --user -u twfarmer.service -f
 systemctl --user reload twfarmer.service
 systemctl --user stop twfarmer.service
 ```
 
-Для запуска при загрузке системы до входа пользователя и работы после выхода:
+To start at boot before signing in and continue after signing out:
 
 ```bash
 loginctl enable-linger "$USER"
 ```
 
-Служба остаётся процессом на переднем плане под управлением systemd.
-При ошибке systemd повторяет запуск через 30 секунд. Программа и команды управления
-используют один и тот же полный путь `--config`.
+The service stays in the foreground under systemd. On failure, systemd retries
+after 30 seconds. Use the same absolute `--config` path for control commands.
 
-## Настройки и сессии
+## Configuration and sessions
 
-Настройки привязаны к текущему каталогу либо к пути `--config`.
-Пример — `twfarmer.example.toml`.
+Settings are relative to the working directory unless `--config PATH` is given.
+See `twfarmer.example.toml`:
 
-- `channels`: общие каналы.
-- `[account_channels]`: личные списки, например `twitch_user = ["welovegames"]`.
-- `enabled_accounts`: сохранённый выбор логинов; пустой список означает, что никто
-  не выбран. Отсутствующее поле означает все аккаунты.
-- `max_channels`: 1 или 2 на аккаунт.
-- `poll_interval_seconds`: опрос балансов, 30–3600 с; по умолчанию 60.
-- `watch_interval_seconds`: обращение к потоку, 15–60 с; по умолчанию 20.
-- `claim_bonus`: автоматическое получение бонусов.
-- `client_id`, `oauth_scopes`: параметры входа Twitch; по умолчанию публичный ID
-  TV-клиента и scope `user_read`. Смена ID требует повторного входа.
+- `language`: `en` or `ru`; defaults to `en`.
+- `channels`: shared channels, in priority order.
+- `[account_channels]`: personal lists, e.g. `twitch_user = ["welovegames"]`.
+- `enabled_accounts`: saved login selection; empty means none, absent means all.
+- `max_channels`: 1 or 2 per account.
+- `poll_interval_seconds`: balance polling, 30-3600 seconds; defaults to 60.
+- `watch_interval_seconds`: watch requests, 15-60 seconds; defaults to 20.
+- `claim_bonus`: automatically claim available bonuses.
+- `client_id`, `oauth_scopes`: sign-in settings, defaulting to the public TV
+  client ID and `user_read`. Changing the client ID requires signing in again.
 
-Новые сессии сохраняются в `twfarmer.toml.accounts/TWITCH_LOGIN.auth.json`.
-Прежний `twfarmer.toml.auth.json` и другие старые файлы продолжают использоваться.
-На Unix новые файлы создаются с правами 0600, каталог аккаунтов — 0700.
-Файлы содержат токены и исключены из Git. Токены не выводятся в журнал и
-не передаются CDN. При повторной авторизации выбранного аккаунта вход в другой
-Twitch-аккаунт отклоняется; прежняя сессия сохраняется.
+New sessions are stored in `twfarmer.toml.accounts/TWITCH_LOGIN.auth.json`.
+Legacy `twfarmer.toml.auth.json` files remain supported. On Unix, new session
+files use permissions 0600 and account directories 0700.
+Sessions contain tokens and are excluded from Git. Tokens are not printed in
+the log or sent to the video CDN. Renewing an account's sign-in rejects a
+different Twitch account and preserves the previous session.
 
-Сессия проверяется при запуске и каждые 5 минут. TV-токен с `expires_in = 0`
-действителен при успешной проверке Twitch. При сетевых ошибках просмотр повторяется
-с увеличением задержки до 5 минут. Авторизация отменяется через `Esc`.
+Sessions are checked at startup and every five minutes. TV tokens with
+`expires_in = 0` remain valid when Twitch validation succeeds.
+Network failures trigger retries with backoff up to five minutes.
+Press `Esc` to cancel device sign-in.
 
-Программа загружает сегмент потока низкого качества и отправляет `minute-watched`
-каждые 20 секунд по умолчанию. Видео не воспроизводится и не записывается на диск.
-Адрес событий берётся из настроек Twitch; при `use_beacon_url = true` используется
-`beacon_url`. ID зрителя передаётся числом.
+The program downloads a low-quality video segment and sends `minute-watched`
+events every 20 seconds by default. Video is not played or saved to disk.
+The event URL comes from Twitch settings; `use_beacon_url = true` selects
+`beacon_url`. The viewer ID is sent as a number.
 
-Решение о начислении принимает Twitch. На новом канале первые баллы обычно
-приходят через несколько минут. Официальный API не предоставляет фарм баллов;
-используемые внутренние запросы могут измениться. Автоматический фарм может
-противоречить правилам Twitch. Ставки и расходование баллов не предусмотрены.
+Twitch decides whether to award points. On a new channel, the first points
+usually arrive after a few minutes. The official API does not support points
+farming; internal requests can change. Automated farming may conflict with
+Twitch's rules. Predictions and spending points are not implemented.
 
-## Проверка
+## Development
 
 ```bash
 cargo fmt --check
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
+python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
-Тесты проверяют перенос имён и настроек, изоляцию аккаунтов, формы и действия
-интерфейса, сохранение показателей при перезапуске, OAuth, HLS и ошибки Twitch.
-Реальное начисление нескольким аккаунтам требует входа в каждый аккаунт
-и работающих эфиров.
+Tests cover account migration and isolation, interface actions, saved settings,
+session totals, English/Russian help and language persistence, OAuth, HLS,
+Twitch errors, and release packaging. Confirming actual points for multiple
+accounts requires signing in to each account and active streams.
 
-## Релизы и лицензия
+## Releases and license
 
-Проект распространяется по [лицензии MIT](LICENSE) и не связан с Twitch.
-Изменения версий перечислены в [CHANGELOG.md](CHANGELOG.md).
-Проверки GitHub Actions, упаковка архивов и выпуск черновика релиза описаны
-в [RELEASING.md](https://github.com/Rednelss/TwFarmer/blob/main/RELEASING.md).
+TwFarmer is distributed under the [MIT license](LICENSE) and is not affiliated
+with Twitch. See [CHANGELOG.md](CHANGELOG.md) and
+[RELEASING.md](https://github.com/Rednelss/TwFarmer/blob/main/RELEASING.md).
 
-При сообщении об ошибке укажите версию программы, систему и текст ошибки.
-Не прикладывайте файлы `*.auth.json` и `*.control.json`; удалите из журналов
-персональные данные перед отправкой.
+When reporting a problem, include the program version, operating system, and
+error text. Do not attach `*.auth.json` or `*.control.json` files. Remove personal
+data from logs before sharing them.

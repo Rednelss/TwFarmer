@@ -26,7 +26,8 @@ pub fn normalize_name(value: &str) -> Result<String> {
             && name
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
-        "Неверное имя аккаунта"
+        "{}",
+        tf!("Invalid account name", "Неверное имя аккаунта")
     );
     Ok(name)
 }
@@ -39,7 +40,11 @@ fn directory(config: &Path) -> PathBuf {
 
 pub fn path(config: &Path, login: &str) -> Result<PathBuf> {
     let normalized = config::normalize_channels(&[login.into()])?;
-    ensure!(normalized.len() == 1, "Укажите один логин Twitch");
+    ensure!(
+        normalized.len() == 1,
+        "{}",
+        tf!("Specify one Twitch login", "Укажите один логин Twitch")
+    );
     Ok(directory(config).join(format!("{}.auth.json", normalized[0])))
 }
 
@@ -51,8 +56,10 @@ fn session_paths(config: &Path) -> Result<Vec<(String, PathBuf)>> {
     }
     let dir = directory(config);
     if dir.exists() {
-        for entry in fs::read_dir(dir).context("Не удалось прочитать аккаунты")?
-        {
+        for entry in fs::read_dir(dir).context(tr!(
+            "Could not read accounts",
+            "Не удалось прочитать аккаунты"
+        ))? {
             let entry = entry?;
             if !entry.file_type()?.is_file() {
                 continue;
@@ -82,7 +89,7 @@ pub fn discover(config: &Path) -> Result<Vec<Profile>> {
         }
         let name = login
             .clone()
-            .unwrap_or_else(|| format!("Сессия {}", profiles.len() + 1));
+            .unwrap_or_else(|| tf!("Session {}", "Сессия {}", profiles.len() + 1));
         profiles.push(Profile {
             name,
             path,
@@ -94,8 +101,7 @@ pub fn discover(config: &Path) -> Result<Vec<Profile>> {
     Ok(profiles)
 }
 
-// Resolve sessions created before metadata was saved. Corrupt/expired sessions
-// stay visible and can be removed or authorized again through the interface.
+// Resolve missing identity metadata; keep unreadable sessions visible.
 pub async fn prepare(config_path: &Path, config: &mut Config) -> Result<Vec<Profile>> {
     let client = twitch::http_client()?;
     for (_, path) in session_paths(config_path)? {
@@ -127,8 +133,7 @@ pub async fn prepare(config_path: &Path, config: &mut Config) -> Result<Vec<Prof
                 }
             }
         }
-        // Known accounts use their Twitch login for settings, even when the
-        // token remains at a legacy path.
+        // Settings use Twitch logins even when tokens remain at legacy paths.
         if profile.login.is_some() {
             profile.config_key = profile.name.clone();
         }
@@ -143,7 +148,11 @@ pub fn select(available: &[Profile], requested: &[String]) -> Result<Vec<Profile
     if requested.is_empty() {
         ensure!(
             !available.is_empty(),
-            "Нет аккаунтов. Добавьте аккаунт через интерфейс или twfarmer login."
+            "{}",
+            tf!(
+                "No accounts. Add an account in the interface or with twfarmer login.",
+                "Нет аккаунтов. Добавьте аккаунт через интерфейс или twfarmer login."
+            )
         );
         return Ok(available.to_vec());
     }
@@ -159,7 +168,12 @@ pub fn select(available: &[Profile], requested: &[String]) -> Result<Vec<Profile
                         .as_ref()
                         .is_some_and(|login| login.eq_ignore_ascii_case(requested))
             })
-            .with_context(|| format!("Аккаунт {login} не найден. Выполните twfarmer login."))?;
+            .with_context(|| {
+                tf!(
+                    "Account {login} was not found. Run twfarmer login.",
+                    "Аккаунт {login} не найден. Выполните twfarmer login."
+                )
+            })?;
         if seen.insert(profile.name.clone()) {
             profiles.push(profile.clone());
         }
@@ -175,9 +189,10 @@ fn create_directory(config: &Path) -> Result<()> {
         use std::os::unix::fs::DirBuilderExt;
         builder.mode(0o700);
     }
-    builder
-        .create(directory(config))
-        .context("Не удалось создать каталог аккаунтов")
+    builder.create(directory(config)).context(tr!(
+        "Could not create the accounts directory",
+        "Не удалось создать каталог аккаунтов"
+    ))
 }
 
 pub fn save_session(
@@ -196,8 +211,12 @@ pub fn save_session(
                     .is_none_or(|login| login == &identity.login),
                 |id| id == identity.user_id
             ),
-            "В браузере выбран другой аккаунт. Войдите как {}.",
-            expected.name
+            "{}",
+            tf!(
+                "A different account was selected in the browser. Sign in as {}.",
+                "В браузере выбран другой аккаунт. Войдите как {}.",
+                expected.name
+            )
         );
     }
     let existing = discover(config_path)?.into_iter().find(|p| {
@@ -219,23 +238,35 @@ pub async fn login(
     config: &Config,
     expected: Option<&Profile>,
 ) -> Result<String> {
-    println!("В браузере выберите нужный аккаунт Twitch.");
+    println!(
+        "{}",
+        tf!(
+            "Select the intended Twitch account in your browser.",
+            "В браузере выберите нужный аккаунт Twitch."
+        )
+    );
     let (session, identity) = auth::authorize(&twitch::http_client()?, config).await?;
     let login = save_session(config_path, &session, &identity, expected)?;
-    println!("Аккаунт {login} сохранён.");
+    println!(
+        "{}",
+        tf!("Account {login} saved.", "Аккаунт {login} сохранён.")
+    );
     Ok(login)
 }
 
 pub fn remove(config_path: &Path, profile: &Profile) -> Result<()> {
     let id = auth::read(&profile.path).ok().and_then(|a| a.user_id);
-    // Removing an account also removes duplicate local copies of its token.
+    // One account can have both named and legacy session files.
     for (_, path) in session_paths(config_path)? {
         let same = path == profile.path
             || id.as_ref().is_some_and(|id| {
                 auth::read(&path).ok().and_then(|a| a.user_id).as_ref() == Some(id)
             });
         if same {
-            fs::remove_file(path).context("Не удалось удалить сессию")?;
+            fs::remove_file(path).context(tr!(
+                "Could not remove the session",
+                "Не удалось удалить сессию"
+            ))?;
         }
     }
     Ok(())
@@ -287,15 +318,18 @@ pub fn set_channels(config: &mut Config, profile: &Profile, values: &[String]) -
 
 pub fn list(profiles: &[Profile], config: &Config) {
     if profiles.is_empty() {
-        println!("Сохранённых аккаунтов нет.");
+        println!(
+            "{}",
+            tf!("No saved accounts.", "Сохранённых аккаунтов нет.")
+        );
         return;
     }
-    println!("{:<26} КАНАЛЫ", "TWITCH");
+    println!("{}", tf!("{:<26} CHANNELS", "{:<26} КАНАЛЫ", "TWITCH"));
     for profile in profiles {
         let source = if config.account_channels.contains_key(&profile.config_key) {
-            "свои"
+            tr!("personal", "свои")
         } else {
-            "общие"
+            tr!("shared", "общие")
         };
         println!(
             "{:<26} {}: {}",

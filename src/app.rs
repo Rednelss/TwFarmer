@@ -220,7 +220,11 @@ impl App {
     async fn launch(&mut self, status_only: bool) -> Result<()> {
         ensure!(
             !self.selected.is_empty(),
-            "Выберите хотя бы один аккаунт в меню."
+            "{}",
+            tf!(
+                "Select at least one account in the menu.",
+                "Выберите хотя бы один аккаунт в меню."
+            )
         );
         let profiles: Vec<_> = self
             .profiles
@@ -228,14 +232,25 @@ impl App {
             .filter(|p| self.selected.contains(&p.name))
             .cloned()
             .collect();
-        ensure!(!profiles.is_empty(), "Сначала добавьте аккаунт Twitch.");
+        ensure!(
+            !profiles.is_empty(),
+            "{}",
+            tf!(
+                "Add a Twitch account first.",
+                "Сначала добавьте аккаунт Twitch."
+            )
+        );
         let config = self.runtime_config()?;
         if !status_only {
             ensure!(
                 profiles
                     .iter()
                     .any(|p| !config.channels_for(&p.config_key).is_empty()),
-                "Список каналов пуст. Задайте общие или личные каналы в меню."
+                "{}",
+                tf!(
+                    "The channel list is empty. Set shared or personal channels in the menu.",
+                    "Список каналов пуст. Задайте общие или личные каналы в меню."
+                )
             );
         }
         self.stop().await;
@@ -272,9 +287,15 @@ impl App {
         self.running = !status_only;
         self.log(
             if status_only {
-                "Проверяю балансы выбранных аккаунтов."
+                tr!(
+                    "Checking balances for the selected accounts.",
+                    "Проверяю балансы выбранных аккаунтов."
+                )
             } else {
-                "Фарм запущен для выбранных аккаунтов."
+                tr!(
+                    "Farming started for the selected accounts.",
+                    "Фарм запущен для выбранных аккаунтов."
+                )
             },
             false,
         );
@@ -313,7 +334,11 @@ impl App {
     fn begin_login(&mut self, name: Option<String>) -> Result<()> {
         ensure!(
             !self.configured_only,
-            "В служебном режиме вход отключён. Добавьте сессию командой twfarmer login отдельно."
+            "{}",
+            tf!(
+                "Login is disabled in daemon mode. Add a session separately with twfarmer login.",
+                "В служебном режиме вход отключён. Добавьте сессию командой twfarmer login отдельно."
+            )
         );
         let expected = name.map(|name| self.profile(&name)).transpose()?;
         self.jobs.abort_all();
@@ -348,29 +373,46 @@ impl App {
             .iter()
             .find(|p| p.name == name)
             .cloned()
-            .context("Аккаунт не найден")
+            .context(tr!("Account not found", "Аккаунт не найден"))
     }
 
     async fn commit(&mut self, next: Config) -> Result<()> {
         next.validate()?;
         next.save(&self.path)?;
+        if self.config.language != next.language {
+            crate::i18n::set_override(None);
+        }
         let restart = self.running;
         if restart {
             self.stop().await;
         }
         self.config = next;
+        crate::i18n::apply_config(self.config.language);
         self.rebuild()?;
         if restart && !self.selected.is_empty() {
             self.launch(false).await?;
         }
         self.controls.overlay = None;
-        self.log("Настройки сохранены.", false);
+        self.log(tr!("Settings saved.", "Настройки сохранены."), false);
         Ok(())
     }
 
     async fn action(&mut self, action: Action) -> Result<bool> {
         let save_selection = matches!(&action, Action::SaveSelection(_));
         match action {
+            Action::SetLanguage(language) => {
+                let mut next = self.config.clone();
+                next.language = language;
+                next.save(&self.path)?;
+                self.config = next;
+                crate::i18n::set_override(None);
+                crate::i18n::apply_config(language);
+                self.controls.overlay = None;
+                self.log(
+                    tf!("Language saved: {}.", "Язык сохранён: {}.", language.name()),
+                    false,
+                );
+            }
             Action::Quit => return Ok(true),
             Action::PlainLog => {
                 if !self.running {
@@ -381,7 +423,6 @@ impl App {
             }
             Action::Reload => {
                 let restart = self.running;
-                // Parse before interrupting a working configuration.
                 Config::read(&self.path)?;
                 self.stop().await;
                 self.load(self.path.clone(), restart, vec![]);
@@ -389,12 +430,12 @@ impl App {
             Action::CancelJob => {
                 self.jobs.abort_all();
                 self.generation += 1;
-                self.log("Операция отменена.", false);
+                self.log(tr!("Operation cancelled.", "Операция отменена."), false);
             }
             Action::Start => self.launch(false).await?,
             Action::Stop => {
                 self.stop().await;
-                self.log("Фарм остановлен.", false);
+                self.log(tr!("Farming stopped.", "Фарм остановлен."), false);
             }
             Action::Status => self.launch(true).await?,
             Action::ToggleLog => {
@@ -434,7 +475,11 @@ impl App {
                     self.launch(false).await?;
                 }
                 self.log(
-                    format!("Выбрано аккаунтов: {}.", self.selected.len()),
+                    tf!(
+                        "Accounts selected: {}.",
+                        "Выбрано аккаунтов: {}.",
+                        self.selected.len()
+                    ),
                     false,
                 );
             }
@@ -448,47 +493,48 @@ impl App {
                 let next = control::settings(&self.config, &values)?;
                 self.commit(next).await?;
             }
-            Action::SaveEdit(target, text) => match target {
-                EditTarget::Config => {
-                    let path = control::config_path(&text)?;
-                    if !path.exists() {
-                        Config::default().save(&path)?;
-                    }
-                    // Parse before stopping a currently valid configuration.
-                    Config::read(&path)?;
-                    self.stop().await;
-                    self.temporary.clear();
-                    self.load(path, false, vec![]);
-                }
-                EditTarget::Temporary => {
-                    let channels = crate::config::normalize_channels(&[text])?;
-                    let restart = self.running;
-                    if restart {
+            Action::SaveEdit(target, text) => {
+                match target {
+                    EditTarget::Config => {
+                        let path = control::config_path(&text)?;
+                        if !path.exists() {
+                            Config::default().save(&path)?;
+                        }
+                        Config::read(&path)?;
                         self.stop().await;
+                        self.temporary.clear();
+                        self.load(path, false, vec![]);
                     }
-                    self.temporary = channels;
-                    self.rebuild()?;
-                    self.controls.overlay = None;
-                    if restart {
-                        self.launch(false).await?;
-                    }
-                    self.log(
-                        "Временный список изменён. Пустой ввод возвращает сохранённые списки.",
+                    EditTarget::Temporary => {
+                        let channels = crate::config::normalize_channels(&[text])?;
+                        let restart = self.running;
+                        if restart {
+                            self.stop().await;
+                        }
+                        self.temporary = channels;
+                        self.rebuild()?;
+                        self.controls.overlay = None;
+                        if restart {
+                            self.launch(false).await?;
+                        }
+                        self.log(
+                        tr!("Temporary channels updated. Empty input restores the saved lists.", "Временный список изменён. Пустой ввод возвращает сохранённые списки."),
                         false,
                     );
+                    }
+                    EditTarget::Common => {
+                        let mut next = self.config.clone();
+                        next.channels = crate::config::normalize_channels(&[text])?;
+                        self.commit(next).await?;
+                    }
+                    EditTarget::Own(name) => {
+                        let profile = self.profile(&name)?;
+                        let mut next = self.config.clone();
+                        accounts::set_channels(&mut next, &profile, &[text])?;
+                        self.commit(next).await?;
+                    }
                 }
-                EditTarget::Common => {
-                    let mut next = self.config.clone();
-                    next.channels = crate::config::normalize_channels(&[text])?;
-                    self.commit(next).await?;
-                }
-                EditTarget::Own(name) => {
-                    let profile = self.profile(&name)?;
-                    let mut next = self.config.clone();
-                    accounts::set_channels(&mut next, &profile, &[text])?;
-                    self.commit(next).await?;
-                }
-            },
+            }
         }
         Ok(false)
     }
@@ -522,11 +568,16 @@ impl App {
                 self.use_saved_selection = false;
                 self.path = path;
                 self.config = config;
+                crate::i18n::apply_config(self.config.language);
                 self.profiles = profiles;
                 if self.configured_only {
                     ensure!(
                         !self.profiles.is_empty(),
-                        "Нет сохранённых сессий. Сначала выполните twfarmer login с этим путём --config."
+                        "{}",
+                        tf!(
+                            "No saved sessions. Run twfarmer login with this --config path first.",
+                            "Нет сохранённых сессий. Сначала выполните twfarmer login с этим путём --config."
+                        )
                     );
                 }
                 self.selected = if !requested.is_empty() {
@@ -554,16 +605,26 @@ impl App {
                 if start {
                     ensure!(
                         !self.selected.is_empty(),
-                        "Нет выбранных аккаунтов. Добавьте аккаунт или выберите аккаунты для запуска."
+                        "{}",
+                        tf!(
+                            "No accounts selected. Add an account or select accounts to start.",
+                            "Нет выбранных аккаунтов. Добавьте аккаунт или выберите аккаунты для запуска."
+                        )
                     );
                     self.launch(false).await?;
                 } else {
                     self.controls.menu();
                     self.log(
                         if self.profiles.is_empty() {
-                            "Добавьте аккаунт Twitch и задайте каналы через меню."
+                            tr!(
+                                "Add a Twitch account and set channels in the menu.",
+                                "Добавьте аккаунт Twitch и задайте каналы через меню."
+                            )
                         } else {
-                            "Выберите действие в меню. Enter — выполнить, Esc — закрыть меню."
+                            tr!(
+                                "Choose an action in the menu. Enter to run, Esc to close.",
+                                "Выберите действие в меню. Enter для запуска, Esc для закрытия."
+                            )
                         },
                         false,
                     );
@@ -590,7 +651,7 @@ impl App {
                 self.selected.insert(login.clone());
                 self.config.enabled_accounts = Some(self.selected.iter().cloned().collect());
                 self.config.save(&self.path)?;
-                self.log(format!("Вход выполнен: {login}."), false);
+                self.log(tf!("Signed in: {login}.", "Вход выполнен: {login}."), false);
                 self.load(self.path.clone(), restart, vec![]);
             }
         }
@@ -601,11 +662,19 @@ impl App {
             Request::Start { accounts, channels } => {
                 ensure!(
                     !self.configured_only || channels.is_empty(),
-                    "В служебном режиме каналы берутся из конфигурации. Сохраните список командой channels и перечитайте настройки."
+                    "{}",
+                    tf!(
+                        "Daemon mode uses configured channels. Save the list with channels and reload the configuration.",
+                        "В служебном режиме каналы берутся из конфигурации. Сохраните список командой channels и перечитайте настройки."
+                    )
                 );
                 ensure!(
                     !matches!(self.controls.overlay, Some(Overlay::Loading)),
-                    "Дождитесь загрузки настроек и повторите start."
+                    "{}",
+                    tf!(
+                        "Wait for the settings to load, then run start again.",
+                        "Дождитесь загрузки настроек и повторите start."
+                    )
                 );
                 if !accounts.is_empty() {
                     self.selected = accounts::select(&self.profiles, &accounts)?
@@ -632,12 +701,20 @@ impl App {
             Request::View { journal } => {
                 ensure!(
                     !self.configured_only,
-                    "В служебном режиме интерфейс отключён. Журнал доступен через journalctl."
+                    "{}",
+                    tf!(
+                        "The interface is disabled in daemon mode. Read the logs with journalctl.",
+                        "В служебном режиме интерфейс отключён. Журнал доступен через journalctl."
+                    )
                 );
                 use std::io::IsTerminal;
                 ensure!(
                     std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
-                    "Для интерфейса запустите программу в интерактивном терминале."
+                    "{}",
+                    tf!(
+                        "Run the program in an interactive terminal to use the interface.",
+                        "Для интерфейса запустите программу в интерактивном терминале."
+                    )
                 );
                 self.controls.plain_log = false;
                 self.controls.log_only = journal;
@@ -671,7 +748,7 @@ pub async fn run(
 }
 
 pub async fn daemon(path: PathBuf, requested: Vec<String>) -> Result<()> {
-    // Fail before opening a control socket when there is no prepared config.
+    // Validate configuration before creating control files.
     Config::read(&path)?;
     run_with_options(
         path,
@@ -714,8 +791,12 @@ async fn run_with_options(path: PathBuf, options: RunOptions) -> Result<()> {
     app.temporary = crate::config::normalize_channels(&channels)?;
     if configured_only {
         println!(
-            "Служебный режим. Конфигурация: {}. Только сохранённые сессии; SIGTERM / Ctrl+C — остановка.",
-            local::key(&path)?.display()
+            "{}",
+            tf!(
+                "Daemon mode. Configuration: {}. Saved sessions only; SIGTERM / Ctrl+C to stop.",
+                "Служебный режим. Конфигурация: {}. Только сохранённые сессии; SIGTERM / Ctrl+C для остановки.",
+                local::key(&path)?.display()
+            )
         );
     }
     let mut input = if no_ui {
@@ -730,7 +811,13 @@ async fn run_with_options(path: PathBuf, options: RunOptions) -> Result<()> {
         if app.controls.plain_log && screen.is_some() {
             drop(screen.take());
             input = None;
-            println!("Обычный журнал. Ctrl+C или twfarmer stop — остановка.");
+            println!(
+                "{}",
+                tf!(
+                    "Plain log. Ctrl+C or twfarmer stop to stop farming.",
+                    "Обычный журнал. Ctrl+C или twfarmer stop для остановки."
+                )
+            );
         } else if !app.controls.plain_log && screen.is_none() {
             screen = Some(Screen::new()?);
             input = Some(EventStream::new());
@@ -739,7 +826,13 @@ async fn run_with_options(path: PathBuf, options: RunOptions) -> Result<()> {
             while let Ok(event) = app.events_rx.try_recv() {
                 app.apply(event);
             }
-            anyhow::bail!("Не осталось работающих аккаунтов. Проверьте ошибки сессий.");
+            anyhow::bail!(
+                "{}",
+                tf!(
+                    "No accounts are still running. Check the session errors.",
+                    "Не осталось работающих аккаунтов. Проверьте ошибки сессий."
+                )
+            );
         }
         tokio::select! {
             _=ticker.tick() => if let Some(screen)=&mut screen {
@@ -765,10 +858,10 @@ async fn run_with_options(path: PathBuf, options: RunOptions) -> Result<()> {
                 }
             }
             Some(result)=app.workers.join_next(), if !app.workers.is_empty() => {
-                if let Err(error)=result && !error.is_cancelled() {app.log(format!("Ошибка задачи: {error}"),true);}
+                if let Err(error)=result && !error.is_cancelled() {app.log(tf!("Task error: {error}", "Ошибка задачи: {error}"),true);}
                 if app.controls.plain_log && app.workers.is_empty() && app.running {
                     while let Ok(event)=app.events_rx.try_recv() {app.apply(event);}
-                    anyhow::bail!("Не осталось работающих аккаунтов. Проверьте ошибки сессий.");
+                    anyhow::bail!("{}", tf!("No accounts are still running. Check the session errors.", "Не осталось работающих аккаунтов. Проверьте ошибки сессий."));
                 }
             }
             connection=async {
@@ -779,11 +872,11 @@ async fn run_with_options(path: PathBuf, options: RunOptions) -> Result<()> {
                         Ok(request)=>app.remote(request).await,Err(error)=>Err(error),
                     };
                     let quit=matches!(result,Ok(true));
-                    let reply=result.map(|_|"Команда выполнена.".to_owned());
-                    if let Err(error)=connection.reply(reply).await {app.log(format!("Управление: {error:#}"),true);}
+                    let reply=result.map(|_|tr!("Command completed.", "Команда выполнена.").to_owned());
+                    if let Err(error)=connection.reply(reply).await {app.log(tf!("Control: {error:#}", "Управление: {error:#}"),true);}
                     if quit {break;}
                 }
-                Err(error)=>app.log(format!("Управление: {error:#}"),true),
+                Err(error)=>app.log(tf!("Control: {error:#}", "Управление: {error:#}"),true),
             },
             event=async {
                 match &mut input {Some(input)=>input.next().await,None=>std::future::pending().await}
@@ -815,9 +908,13 @@ async fn run_with_options(path: PathBuf, options: RunOptions) -> Result<()> {
     app.stop().await;
     drop(screen);
     println!(
-        "Остановлено. Изменение баланса: {:+}. Бонусов: {}.",
-        app.model.gain(),
-        app.model.bonuses()
+        "{}",
+        tf!(
+            "Stopped. Balance change: {:+}. Bonuses: {}.",
+            "Остановлено. Изменение баланса: {:+}. Бонусов: {}.",
+            app.model.gain(),
+            app.model.bonuses()
+        )
     );
     Ok(())
 }

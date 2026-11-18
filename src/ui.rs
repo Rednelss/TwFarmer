@@ -1,7 +1,7 @@
 use crate::{
     accounts::Profile,
     config::Config,
-    control::{Controls, EditTarget, FIELDS, MENU, Overlay},
+    control::{Controls, EditTarget, Overlay, menu_items, settings_fields},
     model::{AccountStatus, ChannelStatus, Dashboard, duration_text},
 };
 use anyhow::{Context, Result};
@@ -33,16 +33,24 @@ pub struct Screen {
 }
 impl Screen {
     pub fn new() -> Result<Self> {
-        let terminal = Terminal::new(CrosstermBackend::new(io::stdout()))
-            .context("Не удалось создать панель")?;
+        let terminal = Terminal::new(CrosstermBackend::new(io::stdout())).context(tr!(
+            "Could not create the dashboard",
+            "Не удалось создать панель"
+        ))?;
         let mut screen = Self { terminal };
-        enable_raw_mode().context("Не удалось включить режим терминала")?;
+        enable_raw_mode().context(tr!(
+            "Could not enable terminal raw mode",
+            "Не удалось включить режим терминала"
+        ))?;
         execute!(
             screen.terminal.backend_mut(),
             EnterAlternateScreen,
             EnableBracketedPaste
         )
-        .context("Не удалось открыть экран панели")?;
+        .context(tr!(
+            "Could not open the dashboard screen",
+            "Не удалось открыть экран панели"
+        ))?;
         screen.terminal.hide_cursor()?;
         Ok(screen)
     }
@@ -54,7 +62,10 @@ impl Screen {
     ) -> Result<()> {
         self.terminal
             .draw(|frame| render_shell(frame, dashboard, state, &shell))
-            .context("Не удалось обновить интерфейс")?;
+            .context(tr!(
+                "Could not update the interface",
+                "Не удалось обновить интерфейс"
+            ))?;
         Ok(())
     }
 }
@@ -180,22 +191,27 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(format!(
+        Span::raw(tf!(
+            " {}  •  Accounts {running}/{}  •  Farming {watching}  •  ",
             " {}  •  Аккаунты {running}/{}  •  Фарм {watching}  •  ",
             duration_text(dashboard.started.elapsed()),
             dashboard.accounts.len()
         )),
         Span::styled(
-            format!("{:+} баллов", dashboard.gain()),
+            tf!("{:+} points", "{:+} баллов", dashboard.gain()),
             Style::default().fg(Color::Green),
         ),
-        Span::raw(format!("  •  Бонусов {}", dashboard.bonuses())),
+        Span::raw(tf!(
+            "  •  Bonuses {}",
+            "  •  Бонусов {}",
+            dashboard.bonuses()
+        )),
     ]);
     frame.render_widget(
         Paragraph::new(header).block(Block::default().borders(Borders::ALL)),
         chunks[0],
     );
-    let tabs = std::iter::once(Line::from("Все аккаунты"))
+    let tabs = std::iter::once(Line::from(tr!("All accounts", "Все аккаунты")))
         .chain(dashboard.accounts.iter().map(|a| {
             let prefix = if a.status == AccountStatus::Error {
                 "! "
@@ -215,7 +231,7 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
             )
             .block(
                 Block::default()
-                    .title(" Аккаунты Twitch ")
+                    .title(tr!(" Twitch accounts ", " Аккаунты Twitch "))
                     .borders(Borders::ALL),
             ),
         chunks[1],
@@ -224,26 +240,32 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
     let medium = area.width >= 80;
     let headers = if wide {
         vec![
-            "АККАУНТ",
-            "КАНАЛ",
-            "СОСТОЯНИЕ",
-            "БАЛАНС",
-            "ПРИРОСТ",
-            "БОНУСЫ",
-            "АКТИВНО",
-            "ОБНОВЛ.",
+            tr!("ACCOUNT", "АККАУНТ"),
+            tr!("CHANNEL", "КАНАЛ"),
+            tr!("STATE", "СОСТОЯНИЕ"),
+            tr!("BALANCE", "БАЛАНС"),
+            tr!("GAIN", "ПРИРОСТ"),
+            tr!("BONUSES", "БОНУСЫ"),
+            tr!("ACTIVE", "АКТИВНО"),
+            tr!("UPDATED", "ОБНОВЛ."),
         ]
     } else if medium {
         vec![
-            "АККАУНТ",
-            "КАНАЛ",
-            "СОСТОЯНИЕ",
-            "БАЛАНС",
-            "ПРИРОСТ",
-            "БОНУСЫ",
+            tr!("ACCOUNT", "АККАУНТ"),
+            tr!("CHANNEL", "КАНАЛ"),
+            tr!("STATE", "СОСТОЯНИЕ"),
+            tr!("BALANCE", "БАЛАНС"),
+            tr!("GAIN", "ПРИРОСТ"),
+            tr!("BONUSES", "БОНУСЫ"),
         ]
     } else {
-        vec!["АККАУНТ", "КАНАЛ", "СОСТОЯНИЕ", "БАЛАНС", "+"]
+        vec![
+            tr!("ACCOUNT", "АККАУНТ"),
+            tr!("CHANNEL", "КАНАЛ"),
+            tr!("STATE", "СОСТОЯНИЕ"),
+            tr!("BALANCE", "БАЛАНС"),
+            "+",
+        ]
     };
     let widths: Vec<_> = (if wide {
         vec![18, 19, 17, 11, 11, 7, 10, 7]
@@ -269,7 +291,7 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
             .unwrap_or_else(|| account.name.clone());
         let gain = channel
             .balance
-            .map_or_else(|| "—".into(), |_| format!("{:+}", channel.gain()));
+            .map_or_else(|| "-".into(), |_| format!("{:+}", channel.gain()));
         let mut cells = vec![
             Cell::from(name),
             Cell::from(channel.name.clone()),
@@ -277,7 +299,7 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
             Cell::from(
                 channel
                     .balance
-                    .map_or_else(|| "—".into(), |n| n.to_string()),
+                    .map_or_else(|| "-".into(), |n| n.to_string()),
             ),
             Cell::from(gain).style(Style::default().fg(if channel.gain() < 0 {
                 Color::Yellow
@@ -291,9 +313,10 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
         if wide {
             cells.push(Cell::from(duration_text(channel.active_time)));
             cells.push(Cell::from(channel.last_update.map_or_else(
-                || "—".into(),
+                || "-".into(),
                 |at| {
-                    format!(
+                    tf!(
+                        "{}s",
                         "{}с",
                         Instant::now().saturating_duration_since(at).as_secs()
                     )
@@ -318,7 +341,10 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
             .highlight_symbol("› ")
             .block(
                 Block::default()
-                    .title(" Каналы • до 2 одновременно на аккаунт ")
+                    .title(tr!(
+                        " Channels • up to 2 concurrent channels per account ",
+                        " Каналы • до 2 одновременно на аккаунт "
+                    ))
                     .borders(Borders::ALL),
             ),
         chunks[2],
@@ -328,9 +354,10 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
         state.table.selected().and_then(|n| entries.get(n))
     {
         let last = channel.last_success.map_or_else(
-            || "ещё не было".into(),
+            || tr!("never", "ещё не было").into(),
             |at| {
-                format!(
+                tf!(
+                    "{}s ago",
                     "{}с назад",
                     Instant::now().saturating_duration_since(at).as_secs()
                 )
@@ -338,29 +365,40 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
         );
         let message = channel.error.as_ref().or(account.error.as_ref()).cloned().unwrap_or_else(|| {
             match channel.status {
-                ChannelStatus::Offline => "Ожидание следующего эфира.".into(),
-                ChannelStatus::Queued => "Ожидание свободного места; приоритет задан порядком каналов.".into(),
-                ChannelStatus::Disabled => "На канале выключены баллы.".into(),
-                _ => "Баланс приходит из Twitch. Первые баллы обычно появляются через несколько минут.".into(),
+                ChannelStatus::Offline => tr!("Waiting for the next stream.", "Ожидание следующего эфира.").into(),
+                ChannelStatus::Queued => tr!("Waiting for a free slot; channel order sets priority.", "Ожидание свободного места; приоритет задан порядком каналов.").into(),
+                ChannelStatus::Disabled => tr!("Channel points are disabled for this channel.", "На канале выключены баллы.").into(),
+                _ => tr!("Twitch provides the balance. The first points usually arrive after a few minutes.", "Баланс приходит из Twitch. Первые баллы обычно появляются через несколько минут.").into(),
             }
         });
-        format!(
+        tf!(
+            "{} • {} • last successful request: {last}\n{message}",
             "{} • {} • успешное обращение: {last}\n{message}",
             account.login.as_deref().unwrap_or(&account.name),
             channel.name
         )
     } else if let Some(account) = state.filter.and_then(|n| dashboard.accounts.get(n)) {
-        account
-            .error
-            .clone()
-            .unwrap_or_else(|| "Для аккаунта не настроены каналы.".into())
+        account.error.clone().unwrap_or_else(|| {
+            tr!(
+                "No channels are configured for this account.",
+                "Для аккаунта не настроены каналы."
+            )
+            .into()
+        })
     } else {
-        "↑/↓ — выбрать канал. Tab — переключить аккаунт.".into()
+        tr!(
+            "↑/↓ to select a channel. Tab to switch accounts.",
+            "↑/↓: выбор канала. Tab: смена аккаунта."
+        )
+        .into()
     };
     frame.render_widget(
         Paragraph::new(detail).wrap(Wrap { trim: false }).block(
             Block::default()
-                .title(" Подробности выбранного канала ")
+                .title(tr!(
+                    " Selected channel details ",
+                    " Подробности выбранного канала "
+                ))
                 .borders(Borders::ALL),
         ),
         chunks[3],
@@ -389,11 +427,21 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
         })
         .collect::<Vec<_>>();
     frame.render_widget(
-        Paragraph::new(logs).block(Block::default().title(" События ").borders(Borders::ALL)),
+        Paragraph::new(logs).block(
+            Block::default()
+                .title(tr!(" Events ", " События "))
+                .borders(Borders::ALL),
+        ),
         chunks[4],
     );
-    frame.render_widget(Paragraph::new(" ↑/↓ или j/k — каналы  •  Tab — аккаунты  •  PgUp/PgDn — прокрутка  •  q / Ctrl+C — выход")
-        .style(Style::default().fg(Color::DarkGray)), chunks[5]);
+    frame.render_widget(
+        Paragraph::new(tr!(
+            " ↑/↓ or j/k: channels  •  Tab: accounts  •  PgUp/PgDn: scroll  •  q / Ctrl+C: quit",
+            " ↑/↓ или j/k: каналы  •  Tab: аккаунты  •  PgUp/PgDn: прокрутка  •  q / Ctrl+C: выход"
+        ))
+        .style(Style::default().fg(Color::DarkGray)),
+        chunks[5],
+    );
 }
 
 pub struct ShellView<'a> {
@@ -454,7 +502,10 @@ pub fn render_shell(
         frame.render_widget(
             Paragraph::new(logs).wrap(Wrap { trim: false }).block(
                 Block::default()
-                    .title(" Журнал • l — вернуться к таблице ")
+                    .title(tr!(
+                        " Log • l to return to the table ",
+                        " Журнал • l: вернуться к таблице "
+                    ))
                     .borders(Borders::ALL),
             ),
             log_area,
@@ -468,14 +519,14 @@ pub fn render_shell(
     );
     frame.render_widget(Clear, footer);
     let source = if shell.temporary.is_empty() {
-        "сохранённые списки".into()
+        tr!("saved lists", "сохранённые списки").into()
     } else {
-        format!("временные: {}", shell.temporary.join(", "))
+        tf!("temporary: {}", "временные: {}", shell.temporary.join(", "))
     };
     frame.render_widget(Paragraph::new(vec![
         Line::from(Span::styled(&shell.controls.notice,Style::default().fg(Color::Yellow))),
-        Line::from(format!("Выбрано {}/{} • {} • {}",shell.selected.len(),shell.profiles.len(),source,shell.path.display())),
-        Line::from(Span::styled(" m / F1 — меню • s — старт • x — стоп • a — вход • c — каналы • Tab — аккаунт • q — выход",
+        Line::from(tf!("Selected {}/{} • {} • {}", "Выбрано {}/{} • {} • {}",shell.selected.len(),shell.profiles.len(),source,shell.path.display())),
+        Line::from(Span::styled(tr!(" m / F1: menu • s: start • x: stop • a: login • c: channels • Tab: account • q: quit", " m / F1: меню • s: старт • x: стоп • a: вход • c: каналы • Tab: аккаунт • q: выход"),
             Style::default().fg(Color::Cyan))),
     ]),footer);
 
@@ -483,7 +534,7 @@ pub fn render_shell(
         return;
     };
     let height = match overlay {
-        Overlay::Menu(_) => 22,
+        Overlay::Menu(_) => 23,
         Overlay::Help => 24,
         Overlay::Settings { .. } => 22,
         Overlay::Accounts { .. } | Overlay::Pick { .. } => 20,
@@ -493,20 +544,27 @@ pub fn render_shell(
     let rect = popup(area, 100, height);
     frame.render_widget(Clear, rect);
     let title = match overlay {
-        Overlay::Menu(_) => "Меню",
-        Overlay::Accounts { .. } => "Аккаунты для запуска",
-        Overlay::Pick { .. } => "Выберите аккаунт",
-        Overlay::Confirm { .. } => "Удаление аккаунта",
+        Overlay::Language(_) => "Language / Язык",
+        Overlay::Menu(_) => tr!("Menu", "Меню"),
+        Overlay::Accounts { .. } => tr!("Accounts to start", "Аккаунты для запуска"),
+        Overlay::Pick { .. } => tr!("Select an account", "Выберите аккаунт"),
+        Overlay::Confirm { .. } => tr!("Remove account", "Удаление аккаунта"),
         Overlay::Edit { target, .. } => match target {
-            EditTarget::Common => "Общие каналы",
-            EditTarget::Own(_) => "Личные каналы",
-            EditTarget::Temporary => "Каналы только на текущий запуск",
-            EditTarget::Config => "Открыть / создать конфигурацию",
+            EditTarget::Common => tr!("Shared channels", "Общие каналы"),
+            EditTarget::Own(_) => tr!("Personal channels", "Личные каналы"),
+            EditTarget::Temporary => tr!(
+                "Channels for this run only",
+                "Каналы только на текущий запуск"
+            ),
+            EditTarget::Config => tr!(
+                "Open / create a configuration",
+                "Открыть / создать конфигурацию"
+            ),
         },
-        Overlay::Settings { .. } => "Настройки фарма",
-        Overlay::Login { .. } => "Вход в Twitch",
-        Overlay::Loading => "Загрузка аккаунтов",
-        Overlay::Help => "Помощь",
+        Overlay::Settings { .. } => tr!("Farming settings", "Настройки фарма"),
+        Overlay::Login { .. } => tr!("Twitch sign-in", "Вход в Twitch"),
+        Overlay::Loading => tr!("Loading accounts", "Загрузка аккаунтов"),
+        Overlay::Help => tr!("Help", "Помощь"),
     };
     let block = Block::default()
         .title(format!(" {title} "))
@@ -517,23 +575,45 @@ pub fn render_shell(
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(3)]).split(inner);
     let highlight = Style::default().bg(Color::DarkGray).fg(Color::Cyan);
     let help = match overlay {
+        Overlay::Language(_) => tr!(
+            "↑/↓: language • Enter: save • Esc: cancel",
+            "↑/↓: язык • Enter: сохранить • Esc: отмена"
+        ),
         Overlay::Accounts { .. } => {
-            "↑/↓ — аккаунт • Пробел — выбрать • a — все • n — никто • Enter — сохранить • t — на этот запуск • Esc — отмена"
+            tr!(
+                "↑/↓: account • Space: select • a: all • n: none • Enter: save • t: this run • Esc: cancel",
+                "↑/↓: аккаунт • Пробел: выбрать • a: все • n: никто • Enter: сохранить • t: на этот запуск • Esc: отмена"
+            )
         }
         Overlay::Menu(_) | Overlay::Pick { .. } => {
-            "↑/↓ — выбрать • Enter — выполнить • Esc — закрыть"
+            tr!(
+                "↑/↓: select • Enter: run • Esc: close",
+                "↑/↓: выбрать • Enter: выполнить • Esc: закрыть"
+            )
         }
         Overlay::Settings { .. } => {
-            "Tab / ↑↓ — поле • Ctrl+U — очистить • Enter — сохранить • Esc — отмена"
+            tr!(
+                "Tab / ↑↓: field • Ctrl+U: clear • Enter: save • Esc: cancel",
+                "Tab / ↑↓: поле • Ctrl+U: очистить • Enter: сохранить • Esc: отмена"
+            )
         }
         Overlay::Edit { .. } => {
-            "←/→ — курсор • Ctrl+U — очистить • Enter — сохранить • Esc — отмена"
+            tr!(
+                "←/→: cursor • Ctrl+U: clear • Enter: save • Esc: cancel",
+                "←/→: курсор • Ctrl+U: очистить • Enter: сохранить • Esc: отмена"
+            )
         }
         Overlay::Login { .. } | Overlay::Loading => {
-            "Esc — отменить. Остальные аккаунты продолжают работать."
+            tr!(
+                "Esc to cancel. Other accounts continue running.",
+                "Esc для отмены. Остальные аккаунты продолжают работать."
+            )
         }
-        Overlay::Confirm { .. } => "←/→ или Tab — выбор • Enter — подтвердить • Esc — отменить",
-        Overlay::Help => "Enter / Esc — закрыть",
+        Overlay::Confirm { .. } => tr!(
+            "←/→ or Tab: select • Enter: confirm • Esc: cancel",
+            "←/→ или Tab: выбор • Enter: подтвердить • Esc: отменить"
+        ),
+        Overlay::Help => tr!("Enter / Esc to close", "Enter / Esc для закрытия"),
     };
     frame.render_widget(
         Paragraph::new(vec![
@@ -547,8 +627,17 @@ pub fn render_shell(
         chunks[1],
     );
     match overlay {
+        Overlay::Language(index) => {
+            frame.render_stateful_widget(
+                List::new(["English", "Русский"])
+                    .highlight_style(highlight)
+                    .highlight_symbol("› "),
+                chunks[0],
+                &mut ListState::default().with_selected(Some(*index)),
+            );
+        }
         Overlay::Menu(index) => {
-            let items = MENU.iter().map(|text| ListItem::new(*text));
+            let items = menu_items().into_iter().map(ListItem::new);
             frame.render_stateful_widget(
                 List::new(items)
                     .highlight_style(highlight)
@@ -560,9 +649,9 @@ pub fn render_shell(
         Overlay::Accounts { index, chosen } => {
             let items = shell.profiles.iter().map(|p| {
                 let source = if shell.config.account_channels.contains_key(&p.config_key) {
-                    "свои"
+                    tr!("personal", "свои")
                 } else {
-                    "общие"
+                    tr!("shared", "общие")
                 };
                 ListItem::new(format!(
                     "[{}] {} • {source}: {}",
@@ -588,12 +677,13 @@ pub fn render_shell(
         }
         Overlay::Confirm { name, yes } => {
             frame.render_widget(
-                Paragraph::new(format!(
+                Paragraph::new(tf!(
+                    "Remove the local session for account {name}?\n\n{}",
                     "Удалить локальную сессию аккаунта {name}?\n\n{}",
                     if *yes {
-                        "Нет    [ Да, удалить ]"
+                        tr!("No    [ Yes, remove ]", "Нет    [ Да, удалить ]")
                     } else {
-                        "[ Нет ]    Да, удалить"
+                        tr!("[ No ]    Yes, remove", "[ Нет ]    Да, удалить")
                     }
                 ))
                 .wrap(Wrap { trim: false }),
@@ -602,10 +692,10 @@ pub fn render_shell(
         }
         Overlay::Edit { target, editor } => {
             let description=match target {
-                EditTarget::Config=>format!("Путь к файлу настроек. Новый файл будет создан.\nСейчас: {}",shell.path.display()),
-                EditTarget::Own(name)=>format!("Аккаунт: {name}. Логины или ссылки через пробел/запятую.\nПустой ввод — использовать общий список."),
-                EditTarget::Temporary=>"Логины или ссылки через пробел/запятую для всех выбранных аккаунтов.\nПустой ввод — вернуть сохранённые списки. На диск не записывается.".into(),
-                EditTarget::Common=>"Логины или ссылки Twitch через пробел/запятую.\nОбщий список используется аккаунтами без личного списка.".into(),
+                EditTarget::Config=>tf!("Settings file path. A new file will be created.\nCurrent: {}", "Путь к файлу настроек. Новый файл будет создан.\nСейчас: {}",shell.path.display()),
+                EditTarget::Own(name)=>tf!("Account: {name}. Logins or URLs separated by spaces/commas.\nEmpty input uses the shared list.", "Аккаунт: {name}. Логины или ссылки через пробел/запятую.\nПустой ввод возвращает общий список."),
+                EditTarget::Temporary=>tr!("Logins or URLs separated by spaces/commas for all selected accounts.\nEmpty input restores the saved lists. This list is not saved to disk.", "Логины или ссылки через пробел/запятую для всех выбранных аккаунтов.\nПустой ввод возвращает сохранённые списки. На диск не записывается.").into(),
+                EditTarget::Common=>tr!("Twitch logins or URLs separated by spaces/commas.\nAccounts without personal channels use the shared list.", "Логины или ссылки Twitch через пробел/запятую.\nОбщий список используется аккаунтами без личного списка.").into(),
             };
             let editor_areas =
                 Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).split(chunks[0]);
@@ -622,7 +712,7 @@ pub fn render_shell(
         Overlay::Settings { index, editors } => {
             let items = editors.iter().enumerate().map(|(n, editor)| {
                 ListItem::new(vec![
-                    Line::from(FIELDS[n]),
+                    Line::from(settings_fields()[n]),
                     Line::from(if n == *index {
                         input_line(editor, chunks[0].width as usize)
                     } else {
@@ -638,9 +728,14 @@ pub fn render_shell(
         }
         Overlay::Login { uri, code } => {
             let text = if code.is_empty() {
-                "Запрашиваю код входа у Twitch…".into()
+                tr!(
+                    "Requesting a login code from Twitch…",
+                    "Запрашиваю код входа у Twitch…"
+                )
+                .into()
             } else {
-                format!(
+                tf!(
+                    "Open in your browser:\n{uri}\n\nCode: {code}\n\nSelect the intended Twitch account and confirm sign-in.\nIts name appears automatically after confirmation.",
                     "Откройте в браузере:\n{uri}\n\nКод: {code}\n\nВыберите нужный Twitch-аккаунт и подтвердите вход.\nИмя появится автоматически после подтверждения."
                 )
             };
@@ -648,14 +743,17 @@ pub fn render_shell(
         }
         Overlay::Loading => {
             frame.render_widget(
-                Paragraph::new("Читаю настройки и сохранённые аккаунты…")
-                    .wrap(Wrap { trim: false }),
+                Paragraph::new(tr!(
+                    "Reading settings and saved accounts…",
+                    "Читаю настройки и сохранённые аккаунты…"
+                ))
+                .wrap(Wrap { trim: false }),
                 chunks[0],
             );
         }
         Overlay::Help => {
             frame.render_widget(Paragraph::new(
-                format!("TwFarmer {}. Все операции доступны через m / F1 — меню.\n\nАккаунты называются по логину Twitch. При входе имя определяется автоматически.\n\nОбщие каналы используются, пока у аккаунта нет личного списка. Порядок каналов задаёт приоритет.\n\nВременный список действует на все выбранные аккаунты до его очистки или выхода.\n\nВыбор аккаунтов и настройки сохраняются. Изменения во время фарма применяются автоматически.\n\n↑/↓ или j/k — канал, Tab — фильтр аккаунтов, PgUp/PgDn — прокрутка.\n\nБалансы проверяются отдельно через меню. Просмотр и бонусы включаются кнопкой запуска.\n\nq / Ctrl+C — выход.", env!("CARGO_PKG_VERSION"))
+                tf!("TwFarmer {}. Open the menu with m / F1.\n\nAccount names come from Twitch logins at sign-in.\n\nAccounts without personal channels use the shared list. Channel order sets priority.\n\nTemporary channels apply to all selected accounts until cleared or the program exits.\n\nAccount selection and settings are saved. Changes during farming apply automatically.\n\n↑/↓ or j/k: channel; Tab: account filter; PgUp/PgDn: scroll.\n\nCheck balances in the menu. Start farming to watch streams and claim bonuses.\n\nq / Ctrl+C to quit.", "TwFarmer {}. Откройте меню через m / F1.\n\nПри входе имя аккаунта определяется по логину Twitch.\n\nАккаунты без личного списка используют общие каналы. Порядок каналов задаёт приоритет.\n\nВременный список действует на все выбранные аккаунты до его очистки или выхода.\n\nВыбор аккаунтов и настройки сохраняются. Изменения во время фарма применяются автоматически.\n\n↑/↓ или j/k: канал; Tab: фильтр аккаунтов; PgUp/PgDn: прокрутка.\n\nПроверяйте балансы через меню. Запустите фарм для просмотра и сбора бонусов.\n\nq / Ctrl+C для выхода.", env!("CARGO_PKG_VERSION"))
             ).wrap(Wrap{trim:false}),chunks[0]);
         }
     }
@@ -818,7 +916,7 @@ mod tests {
         assert!(text.contains("channel_b"));
         assert!(text.contains("150"));
         assert!(text.contains("+50"));
-        assert!(text.contains("Ошибка"));
+        assert!(text.contains("Error"));
     }
 
     #[test]

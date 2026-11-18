@@ -4,7 +4,11 @@ use reqwest::Url;
 pub fn lowest_variant(base: &Url, playlist: &str) -> Result<Url> {
     ensure!(
         playlist.trim_start().starts_with("#EXTM3U"),
-        "Ответ потока не является HLS-плейлистом"
+        "{}",
+        tf!(
+            "The stream response is not an HLS playlist",
+            "Ответ потока не является HLS-плейлистом"
+        )
     );
     let mut variants = Vec::new();
     let mut attributes = None;
@@ -26,7 +30,10 @@ pub fn lowest_variant(base: &Url, playlist: &str) -> Result<Url> {
             variants.push((
                 !is_video,
                 bandwidth,
-                base.join(line).context("Неверный адрес качества HLS")?,
+                base.join(line).context(tr!(
+                    "Invalid HLS quality URL",
+                    "Неверный адрес качества HLS"
+                ))?,
             ));
         }
     }
@@ -35,20 +42,33 @@ pub fn lowest_variant(base: &Url, playlist: &str) -> Result<Url> {
         .into_iter()
         .next()
         .map(|(_, _, url)| url)
-        .context("В HLS нет доступных качеств")
+        .context(tr!(
+            "No available qualities in the HLS playlist",
+            "В HLS нет доступных качеств"
+        ))
 }
 
 pub fn latest_segment(base: &Url, playlist: &str) -> Result<Url> {
     ensure!(
         playlist.trim_start().starts_with("#EXTM3U"),
-        "Ответ потока не является HLS-плейлистом"
+        "{}",
+        tf!(
+            "The stream response is not an HLS playlist",
+            "Ответ потока не является HLS-плейлистом"
+        )
     );
     let line = playlist
         .lines()
         .map(str::trim)
         .rfind(|line| !line.is_empty() && !line.starts_with('#'))
-        .context("В HLS нет сегментов; канал мог завершить эфир")?;
-    base.join(line).context("Неверный адрес сегмента HLS")
+        .context(tr!(
+            "No HLS segments; the stream may have ended",
+            "В HLS нет сегментов; канал мог завершить эфир"
+        ))?;
+    base.join(line).context(tr!(
+        "Invalid HLS segment URL",
+        "Неверный адрес сегмента HLS"
+    ))
 }
 
 #[cfg(test)]

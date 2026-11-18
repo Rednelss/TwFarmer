@@ -1,19 +1,22 @@
-Первый публичный релиз TwFarmer — консольного клиента на Rust для фарма
-баллов Twitch с нескольких аккаунтов.
+First public release of TwFarmer, a Rust terminal client for Twitch channel
+points farming with multiple accounts.
 
-- Авторизация на сайте Twitch по коду, без ввода пароля в программе.
-- Общие и личные списки каналов для каждого аккаунта.
-- Обновляемый интерфейс с балансами, бонусами, состояниями и журналом.
-- Управление через меню и команды, до двух каналов одновременно на аккаунт.
-- `daemon` для сохранённых сессий и готовый пользовательский unit systemd.
+- Twitch device-code sign-in; passwords are entered on Twitch.
+- Shared and personal channel lists for each account.
+- Updating interface with balances, bonuses, states, and logs.
+- Menus and commands, up to two concurrent channels per account.
+- `daemon` for saved sessions and a systemd user unit.
+- English and Russian interface, help, and messages. Choose **Language / Язык**
+  in the menu, use `twfarmer language en|ru`, or override a run with `--lang`.
 
-Архивы содержат программу, README, пример конфигурации, лицензию MIT и историю
-изменений. Linux-архив также содержит unit systemd. Файлы сессий в архивы не входят.
+Archives contain the program, English and Russian README and changelog files,
+example configuration, and the MIT license. Linux also includes the systemd unit.
+Session files are excluded.
 
-Распакуйте архив для своей системы и запустите `twfarmer` (`twfarmer.exe` на
-Windows). В меню добавьте аккаунт, задайте каналы и запустите фарм.
-Linux-сборка из GitHub Actions требует glibc 2.35 или новее.
-Контрольные суммы архивов находятся в `SHA256SUMS`.
+Extract the archive for your system and run `twfarmer` (`twfarmer.exe` on Windows).
+Add an account, set channels, and start farming through the menu.
+The GitHub Actions Linux build requires glibc 2.35 or newer.
+Archive checksums are in `SHA256SUMS`.
 
-Начисление баллов зависит от Twitch. Программа использует внутренние запросы,
-которые могут измениться. Подробные инструкции и ограничения приведены в README.
+Twitch decides whether to award points. The program uses internal requests
+that can change. See the README for instructions and limitations.

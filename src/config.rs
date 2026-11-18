@@ -8,6 +8,8 @@ use std::{
 
 #[derive(clap::Args, Default)]
 pub struct SettingsPatch {
+    #[arg(long, value_enum, help = tr!("Saved interface and log language: en or ru", "Сохранённый язык интерфейса и журнала: en или ru"))]
+    pub language: Option<crate::i18n::Language>,
     #[arg(long)]
     pub max_channels: Option<usize>,
     #[arg(long)]
@@ -20,13 +22,16 @@ pub struct SettingsPatch {
     pub client_id: Option<String>,
     #[arg(
         long,
-        help = "Scopes через пробел или запятую; пустая строка очищает список"
+        help = tr!("Scopes separated by spaces or commas; an empty string clears the list", "Scopes через пробел или запятую; пустая строка очищает список")
     )]
     pub oauth_scopes: Option<String>,
 }
 impl SettingsPatch {
     pub fn apply(self, config: &Config) -> Result<Config> {
         let mut next = config.clone();
+        if let Some(language) = self.language {
+            next.language = language;
+        }
         if let Some(value) = self.max_channels {
             next.max_channels = value;
         }
@@ -59,6 +64,7 @@ pub const CLIENT_ID: &str = "ue6666qo983tsx6so1t0vnawi233wa";
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    pub language: crate::i18n::Language,
     pub channels: Vec<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub account_channels: BTreeMap<String, Vec<String>>,
@@ -74,6 +80,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            language: crate::i18n::Language::En,
             channels: vec![],
             account_channels: BTreeMap::new(),
             enabled_accounts: None,
@@ -90,12 +97,16 @@ impl Default for Config {
 impl Config {
     pub fn read(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path).with_context(|| {
-            format!(
+            tf!(
+                "Could not read {}. Run twfarmer init.",
                 "Не удалось прочитать {}. Выполните twfarmer init.",
                 path.display()
             )
         })?;
-        let mut config: Self = toml::from_str(&text).context("Ошибка в TOML-конфигурации")?;
+        let mut config: Self = toml::from_str(&text).context(tr!(
+            "Invalid TOML configuration",
+            "Ошибка в TOML-конфигурации"
+        ))?;
         config.channels = normalize_channels(&config.channels)?;
         let mut per_account = BTreeMap::new();
         for (name, channels) in std::mem::take(&mut config.account_channels) {
@@ -103,7 +114,11 @@ impl Config {
             let channels = normalize_channels(&channels)?;
             ensure!(
                 !per_account.contains_key(&name),
-                "Повторяющийся логин аккаунта: {name}"
+                "{}",
+                tf!(
+                    "Duplicate account login: {name}",
+                    "Повторяющийся логин аккаунта: {name}"
+                )
             );
             per_account.insert(name, channels);
         }
@@ -118,20 +133,33 @@ impl Config {
         let config = self;
         ensure!(
             (1..=2).contains(&config.max_channels),
-            "max_channels должен быть 1 или 2"
+            "{}",
+            tf!(
+                "max_channels must be 1 or 2",
+                "max_channels должен быть 1 или 2"
+            )
         );
         ensure!(
             (30..=3600).contains(&config.poll_interval_seconds),
-            "poll_interval_seconds: от 30 до 3600"
+            "{}",
+            tf!(
+                "poll_interval_seconds: from 30 to 3600",
+                "poll_interval_seconds: от 30 до 3600"
+            )
         );
         ensure!(
             (15..=60).contains(&config.watch_interval_seconds),
-            "watch_interval_seconds: от 15 до 60"
+            "{}",
+            tf!(
+                "watch_interval_seconds: from 15 to 60",
+                "watch_interval_seconds: от 15 до 60"
+            )
         );
         ensure!(
             !config.client_id.is_empty()
                 && config.client_id.chars().all(|c| c.is_ascii_alphanumeric()),
-            "Неверный client_id"
+            "{}",
+            tf!("Invalid client_id", "Неверный client_id")
         );
         Ok(())
     }
@@ -145,7 +173,11 @@ impl Config {
     pub fn override_for_run(&mut self, values: &[String]) -> Result<()> {
         if !values.is_empty() {
             let channels = normalize_channels(values)?;
-            ensure!(!channels.is_empty(), "Список каналов пуст");
+            ensure!(
+                !channels.is_empty(),
+                "{}",
+                tf!("The channel list is empty", "Список каналов пуст")
+            );
             self.channels = channels;
             self.account_channels.clear();
         }
@@ -158,31 +190,43 @@ impl Config {
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        let mut file =
-            tempfile::NamedTempFile::new_in(parent).context("Не удалось создать файл настроек")?;
-        let text = format!(
+        let mut file = tempfile::NamedTempFile::new_in(parent).context(tr!(
+            "Could not create the settings file",
+            "Не удалось создать файл настроек"
+        ))?;
+        let text = tf!(
+            "# Channels are listed in priority order.\n{}",
             "# Каналы перечислены в порядке приоритета.\n{}",
             toml::to_string_pretty(self)?
         );
         file.write_all(text.as_bytes())?;
         file.as_file().sync_all()?;
-        file.persist(path)
-            .map_err(|_| anyhow::anyhow!("Не удалось сохранить настройки"))?;
+        file.persist(path).map_err(|_| {
+            anyhow::anyhow!(
+                "{}",
+                tf!("Could not save settings", "Не удалось сохранить настройки")
+            )
+        })?;
         Ok(())
     }
 
     pub fn create(path: &Path, channels: &[String]) -> Result<()> {
         ensure!(
             !path.exists(),
-            "{} уже существует; отредактируйте файл.",
-            path.display()
+            "{}",
+            tf!(
+                "{} already exists; edit the file instead.",
+                "{} уже существует; отредактируйте файл.",
+                path.display()
+            )
         );
         let config = Self {
             channels: normalize_channels(channels)?,
             ..Self::default()
         };
 
-        let text = format!(
+        let text = tf!(
+            "# Channels are listed in priority order.\n{}",
             "# Каналы перечислены в порядке приоритета.\n{}",
             toml::to_string_pretty(&config)?
         );
@@ -191,7 +235,13 @@ impl Config {
             .write(true)
             .create_new(true)
             .open(path)
-            .with_context(|| format!("Не удалось создать {}", path.display()))?;
+            .with_context(|| {
+                tf!(
+                    "Could not create {}",
+                    "Не удалось создать {}",
+                    path.display()
+                )
+            })?;
         file.write_all(text.as_bytes())?;
         Ok(())
     }
@@ -212,20 +262,38 @@ pub fn normalize_channels(values: &[String]) -> Result<Vec<String>> {
             .filter(|s| !s.is_empty())
         {
             let login = if input.starts_with("https://") || input.starts_with("http://") {
-                let url = reqwest::Url::parse(input).context("Неверная ссылка на канал")?;
+                let url = reqwest::Url::parse(input)
+                    .context(tr!("Invalid channel URL", "Неверная ссылка на канал"))?;
                 ensure!(
                     matches!(
                         url.host_str(),
                         Some("twitch.tv" | "www.twitch.tv" | "m.twitch.tv")
                     ),
-                    "Ожидалась ссылка Twitch"
+                    "{}",
+                    tf!("A Twitch URL was expected", "Ожидалась ссылка Twitch")
                 );
                 let mut segments = url
                     .path_segments()
-                    .context("В ссылке нет канала")?
+                    .context(tr!(
+                        "The URL does not contain a channel",
+                        "В ссылке нет канала"
+                    ))?
                     .filter(|s| !s.is_empty());
-                let login = segments.next().context("В ссылке нет канала")?.to_string();
-                ensure!(segments.next().is_none(), "Укажите главную страницу канала");
+                let login = segments
+                    .next()
+                    .context(tr!(
+                        "The URL does not contain a channel",
+                        "В ссылке нет канала"
+                    ))?
+                    .to_string();
+                ensure!(
+                    segments.next().is_none(),
+                    "{}",
+                    tf!(
+                        "Specify the channel's main page",
+                        "Укажите главную страницу канала"
+                    )
+                );
                 login
             } else {
                 input
@@ -238,7 +306,11 @@ pub fn normalize_channels(values: &[String]) -> Result<Vec<String>> {
                 !login.is_empty()
                     && login.len() <= 25
                     && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
-                "Неверное имя канала: {input}"
+                "{}",
+                tf!(
+                    "Invalid channel name: {input}",
+                    "Неверное имя канала: {input}"
+                )
             );
             if seen.insert(login.clone()) {
                 channels.push(login);
@@ -246,7 +318,13 @@ pub fn normalize_channels(values: &[String]) -> Result<Vec<String>> {
         }
     }
     if channels.len() > 100 {
-        bail!("Допускается не более 100 каналов");
+        bail!(
+            "{}",
+            tf!(
+                "At most 100 channels are allowed",
+                "Допускается не более 100 каналов"
+            )
+        );
     }
     Ok(channels)
 }

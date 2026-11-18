@@ -44,17 +44,20 @@ struct Reply {
 
 pub fn key(config: &Path) -> Result<PathBuf> {
     if config.exists() {
-        return config
-            .canonicalize()
-            .context("Не удалось определить путь настроек");
+        return config.canonicalize().context(tr!(
+            "Could not resolve the settings path",
+            "Не удалось определить путь настроек"
+        ));
     }
     let parent = config
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    Ok(parent
-        .canonicalize()?
-        .join(config.file_name().context("Неверный путь настроек")?))
+    Ok(parent.canonicalize()?.join(
+        config
+            .file_name()
+            .context(tr!("Invalid settings path", "Неверный путь настроек"))?,
+    ))
 }
 fn sidecar(key: &Path, suffix: &str) -> PathBuf {
     let mut value = key.as_os_str().to_os_string();
@@ -80,10 +83,11 @@ impl Server {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let lock = options
-            .open(lock_path)
-            .context("Не удалось открыть блокировку программы")?;
-        lock.try_lock().context("Для этой конфигурации программа уже запущена. Используйте start, stop, reload или меню.")?;
+        let lock = options.open(lock_path).context(tr!(
+            "Could not open the instance lock",
+            "Не удалось открыть блокировку программы"
+        ))?;
+        lock.try_lock().context(tr!("The program is already running for this configuration. Use start, stop, reload, or the menu.", "Для этой конфигурации программа уже запущена. Используйте start, stop, reload или меню."))?;
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let token = uuid::Uuid::new_v4().simple().to_string();
         let endpoint = Endpoint {
@@ -93,8 +97,10 @@ impl Server {
         let endpoint_path = sidecar(&key, ".control.json");
         let mut file = tempfile::NamedTempFile::new_in(key.parent().unwrap())?;
         file.write_all(&serde_json::to_vec(&endpoint)?)?;
-        file.persist(&endpoint_path)
-            .context("Не удалось сохранить адрес управления")?;
+        file.persist(&endpoint_path).context(tr!(
+            "Could not save the control endpoint",
+            "Не удалось сохранить адрес управления"
+        ))?;
         Ok(Self {
             key,
             listener,
@@ -128,12 +134,25 @@ impl Connection {
             (&mut self.stream).take(16385).read_to_end(&mut bytes),
         )
         .await??;
-        ensure!(bytes.len() <= 16384, "Слишком длинная команда управления");
-        let message: Message =
-            serde_json::from_slice(&bytes).context("Неверная команда управления")?;
+        ensure!(
+            bytes.len() <= 16384,
+            "{}",
+            tf!(
+                "The control command is too long",
+                "Слишком длинная команда управления"
+            )
+        );
+        let message: Message = serde_json::from_slice(&bytes).context(tr!(
+            "Invalid control command",
+            "Неверная команда управления"
+        ))?;
         ensure!(
             message.token == self.token,
-            "Нет доступа к управлению экземпляром"
+            "{}",
+            tf!(
+                "Access to instance control denied",
+                "Нет доступа к управлению экземпляром"
+            )
         );
         Ok(message.request)
     }
@@ -156,15 +175,22 @@ impl Connection {
 }
 pub async fn send(config: &Path, request: Request) -> Result<String> {
     let endpoint:Endpoint=serde_json::from_slice(&fs::read(sidecar(&key(config)?,".control.json"))
-        .context("Нет запущенной программы для этой конфигурации. Сначала откройте интерфейс или выполните run.")?)?;
+        .context(tr!("No program is running for this configuration. Open the interface or run twfarmer run first.", "Нет запущенной программы для этой конфигурации. Сначала откройте интерфейс или выполните run."))?)?;
     let address: std::net::SocketAddr = endpoint.address.parse()?;
     ensure!(
         address.ip().is_loopback(),
-        "Неверный адрес локального управления"
+        "{}",
+        tf!(
+            "Invalid local control address",
+            "Неверный адрес локального управления"
+        )
     );
     let mut stream = timeout(Duration::from_secs(2), TcpStream::connect(address))
         .await?
-        .context("Запущенная программа недоступна. Запустите её заново.")?;
+        .context(tr!(
+            "The running program is unavailable. Restart it.",
+            "Запущенная программа недоступна. Запустите её заново."
+        ))?;
     stream
         .write_all(&serde_json::to_vec(&Message {
             token: endpoint.token,
@@ -178,8 +204,16 @@ pub async fn send(config: &Path, request: Request) -> Result<String> {
         (&mut stream).take(16385).read_to_end(&mut bytes),
     )
     .await??;
-    ensure!(bytes.len() <= 16384, "Слишком длинный ответ управления");
-    let reply: Reply = serde_json::from_slice(&bytes).context("Нет ответа программы")?;
+    ensure!(
+        bytes.len() <= 16384,
+        "{}",
+        tf!(
+            "The control response is too long",
+            "Слишком длинный ответ управления"
+        )
+    );
+    let reply: Reply = serde_json::from_slice(&bytes)
+        .context(tr!("No response from the program", "Нет ответа программы"))?;
     ensure!(reply.ok, "{}", reply.message);
     Ok(reply.message)
 }

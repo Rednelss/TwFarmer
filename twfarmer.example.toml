@@ -1,6 +1,9 @@
-# Общие каналы в порядке приоритета.
+# Interface and log language: "en" or "ru". / Язык интерфейса и журнала.
+language = "en"
+
+# Shared channels in priority order. / Общие каналы в порядке приоритета.
 channels = ["welovegames", "betboom_cs_ru"]
-# Необязательный сохранённый выбор по логинам Twitch.
+# Optional saved selection of Twitch logins. / Необязательный выбор аккаунтов.
 # enabled_accounts = ["twitch_user"]
 
 max_channels = 2
@@ -10,6 +13,6 @@ claim_bonus = true
 client_id = "ue6666qo983tsx6so1t0vnawi233wa"
 oauth_scopes = ["user_read"]
 
-# Личные списки полностью заменяют общий для выбранного аккаунта.
+# Personal lists replace shared channels. / Личные списки заменяют общие каналы.
 [account_channels]
-# twitch_user = ["lizabaktt", "morkovushkaa"]
+# twitch_user = ["lizabaktt", "welovegames"]

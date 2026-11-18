@@ -39,11 +39,23 @@ struct Poll {
 }
 
 fn reserve_user(users: &ActiveUsers, user_id: &str, profile: &str) -> Result<()> {
-    let mut users = users
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Ошибка учёта активных аккаунтов"))?;
+    let mut users = users.lock().map_err(|_| {
+        anyhow::anyhow!(
+            "{}",
+            tf!(
+                "Could not track active accounts",
+                "Ошибка учёта активных аккаунтов"
+            )
+        )
+    })?;
     if let Some(profile) = users.get(user_id) {
-        bail!("Аккаунт {profile} уже запущен");
+        bail!(
+            "{}",
+            tf!(
+                "Account {profile} is already running",
+                "Аккаунт {profile} уже запущен"
+            )
+        );
     }
     users.insert(user_id.into(), profile.into());
     Ok(())
@@ -58,9 +70,13 @@ pub async fn run(
     let channels = config.channels_for(&profile.config_key).to_vec();
     ensure!(
         !channels.is_empty(),
-        "У аккаунта {} нет каналов. Настройте общий или личный список для {}.",
-        profile.name,
-        profile.name
+        "{}",
+        tf!(
+            "Account {} has no channels. Set a shared or personal list for {}.",
+            "У аккаунта {} нет каналов. Настройте общий или личный список для {}.",
+            profile.name,
+            profile.name
+        )
     );
     let mut twitch = Twitch::connect(&config, profile.path).await?;
     reserve_user(&users, &twitch.identity.user_id, &profile.name)?;
@@ -70,7 +86,8 @@ pub async fn run(
         None,
     );
     reporter.log(
-        format!(
+        tf!(
+            "Signed in: {}. Channels: {}",
             "Вход: {}. Каналы: {}",
             twitch.identity.login,
             channels.join(", ")
@@ -94,7 +111,10 @@ pub async fn run(
                 Err(error) if error.is::<SessionExpired>() => return Err(error),
                 Err(error) => {
                     reporter.log(
-                        format!("Проверка сессии: {error:#}; повтор через минуту."),
+                        tf!(
+                            "Session validation: {error:#}; retrying in a minute.",
+                            "Проверка сессии: {error:#}; повтор через минуту."
+                        ),
                         true,
                     );
                     next_validation = Instant::now() + Duration::from_secs(60);
@@ -127,9 +147,10 @@ pub async fn run(
             let chosen: HashSet<_> = candidates.iter().map(|c| c.login.clone()).collect();
             let mut expired = false;
             for (name, result) in results {
-                let state = states
-                    .get_mut(&name)
-                    .context("Не найдено состояние канала")?;
+                let state = states.get_mut(&name).context(tr!(
+                    "Channel state not found",
+                    "Не найдено состояние канала"
+                ))?;
                 match result {
                     Ok(poll) => {
                         if let Some(points) = poll.points {
@@ -148,21 +169,27 @@ pub async fn run(
                                     match twitch.claim(&poll.channel, &claim).await {
                                         Ok(()) => {
                                             state.view.bonuses += 1;
-                                            reporter.log(format!("{name}: бонус получен; баланс обновится при следующем опросе."), false);
+                                            reporter.log(tf!("{name}: bonus claimed; the balance will update on the next poll.", "{name}: бонус получен; баланс обновится при следующем опросе."), false);
                                         }
                                         Err(error) => {
                                             expired |= error.is::<SessionExpired>();
-                                            state.view.error =
-                                                Some(format!("Получение бонуса: {error:#}"));
+                                            state.view.error = Some(tf!(
+                                                "Claiming a bonus: {error:#}",
+                                                "Получение бонуса: {error:#}"
+                                            ));
                                             reporter.log(
-                                                format!("{name}: бонус не получен: {error:#}"),
+                                                tf!(
+                                                    "{name}: could not claim the bonus: {error:#}",
+                                                    "{name}: бонус не получен: {error:#}"
+                                                ),
                                                 true,
                                             );
                                         }
                                     }
                                 }
                                 reporter.log(
-                                    format!(
+                                    tf!(
+                                        "{name}: {} points ({:+} this session).",
                                         "{name}: {} баллов ({:+} за сессию).",
                                         points.balance,
                                         state.view.gain()
@@ -217,9 +244,9 @@ pub async fn run(
             if current != previous {
                 reporter.log(
                     if current.is_empty() {
-                        "Ожидание онлайн-каналов.".into()
+                        tr!("Waiting for online channels.", "Ожидание онлайн-каналов.").into()
                     } else {
-                        format!("Просмотр: {}.", current.join(", "))
+                        tf!("Watching: {}.", "Просмотр: {}.", current.join(", "))
                     },
                     false,
                 );
@@ -227,9 +254,10 @@ pub async fn run(
             next_poll = Instant::now() + Duration::from_secs(config.poll_interval_seconds);
         }
         for channel in &selected {
-            let state = states
-                .get_mut(&channel.login)
-                .context("Не найдено состояние канала")?;
+            let state = states.get_mut(&channel.login).context(tr!(
+                "Channel state not found",
+                "Не найдено состояние канала"
+            ))?;
             if state.retry_at.is_some_and(|at| Instant::now() < at) {
                 continue;
             }
@@ -263,7 +291,11 @@ pub async fn run(
                     state.failures = 0;
                     if !was_watching {
                         reporter.log(
-                            format!("{}: события просмотра отправляются.", channel.login),
+                            tf!(
+                                "{}: watch events are being sent.",
+                                "{}: события просмотра отправляются.",
+                                channel.login
+                            ),
                             false,
                         );
                     }
@@ -284,7 +316,11 @@ pub async fn run(
                     state.view.status = ChannelStatus::Retry(at);
                     state.view.error = Some(format!("{error:#}"));
                     reporter.log(
-                        format!("{}: {error:#}. Повтор через {delay} с.", channel.login),
+                        tf!(
+                            "{}: {error:#}. Retrying in {delay} s.",
+                            "{}: {error:#}. Повтор через {delay} с.",
+                            channel.login
+                        ),
                         true,
                     );
                 }
@@ -322,11 +358,12 @@ pub async fn status(profile: Profile, config: Config, reporter: Reporter) -> Res
                     ChannelStatus::Disabled
                 };
                 reporter.log(
-                    format!(
+                    tf!(
+                        "{name}: {}, balance: {}.",
                         "{name}: {}, баланс: {}.",
                         view.status.label(),
                         view.balance
-                            .map_or_else(|| "—".into(), |balance| balance.to_string())
+                            .map_or_else(|| "-".into(), |balance| balance.to_string())
                     ),
                     false,
                 );

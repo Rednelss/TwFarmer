@@ -3,9 +3,10 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 pub fn minute_watched_payload(channel: &Channel, user_id: &str) -> Result<Value> {
-    let user_id: u64 = user_id
-        .parse()
-        .context("Twitch вернул нечисловой ID зрителя")?;
+    let user_id: u64 = user_id.parse().context(tr!(
+        "Twitch returned a non-numeric viewer ID",
+        "Twitch вернул нечисловой ID зрителя"
+    ))?;
     Ok(json!([{"event":"minute-watched", "properties":{
         "channel_id":channel.id,
         "broadcast_id":channel.broadcast_id,

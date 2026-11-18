@@ -72,4 +72,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" dist/* --draft --verify-tag --title "TwFarmer $RELEASE_TAG" --notes-file packaging/RELEASE_NOTES.md
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          english = Path('packaging/RELEASE_NOTES.md').read_text(encoding='utf-8')
+          russian = Path('packaging/RELEASE_NOTES.ru.md').read_text(encoding='utf-8')
+          Path(os.environ['RUNNER_TEMP'], 'twfarmer-release-notes.md').write_text(
+              '## English\n\n' + english + '\n## Русский\n\n' + russian,
+              encoding='utf-8',
+          )
+          PY
+          gh release create "$RELEASE_TAG" dist/* --draft --verify-tag --title "TwFarmer $RELEASE_TAG" --notes-file "$RUNNER_TEMP/twfarmer-release-notes.md"

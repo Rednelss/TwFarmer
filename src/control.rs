@@ -2,34 +2,67 @@ use crate::{accounts::Profile, config::Config};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::{collections::HashSet, path::PathBuf};
 
-pub const MENU: &[&str] = &[
-    "Запустить фарм выбранных аккаунтов",
-    "Остановить фарм",
-    "Проверить балансы без фарма",
-    "Выбрать аккаунты для запуска",
-    "Добавить аккаунт Twitch",
-    "Обновить вход в аккаунт",
-    "Удалить аккаунт",
-    "Общие каналы",
-    "Личные каналы аккаунта",
-    "Вернуть аккаунт к общим каналам",
-    "Каналы только на текущий запуск",
-    "Настройки фарма",
-    "Открыть / создать конфигурацию",
-    "Показать / скрыть журнал",
-    "Помощь",
-    "Выход",
-    "Переключиться на обычный журнал",
-    "Перечитать настройки с диска",
-];
-pub const FIELDS: &[&str] = &[
-    "Каналов одновременно на аккаунт (1–2)",
-    "Опрос балансов, секунд (30–3600)",
-    "Просмотр, секунд (15–60)",
-    "Забирать бонусы (true/false)",
-    "Client ID Twitch",
-    "OAuth scopes через пробел",
-];
+pub fn menu_items() -> Vec<&'static str> {
+    vec![
+        tr!(
+            "Start farming for selected accounts",
+            "Запустить фарм выбранных аккаунтов"
+        ),
+        tr!("Stop farming", "Остановить фарм"),
+        tr!(
+            "Check balances without farming",
+            "Проверить балансы без фарма"
+        ),
+        tr!("Select accounts to start", "Выбрать аккаунты для запуска"),
+        tr!("Add a Twitch account", "Добавить аккаунт Twitch"),
+        tr!("Renew account login", "Обновить вход в аккаунт"),
+        tr!("Remove an account", "Удалить аккаунт"),
+        tr!("Shared channels", "Общие каналы"),
+        tr!("Personal account channels", "Личные каналы аккаунта"),
+        tr!(
+            "Use shared channels for an account",
+            "Вернуть аккаунт к общим каналам"
+        ),
+        tr!(
+            "Channels for this run only",
+            "Каналы только на текущий запуск"
+        ),
+        tr!("Farming settings", "Настройки фарма"),
+        tr!(
+            "Open / create a configuration",
+            "Открыть / создать конфигурацию"
+        ),
+        tr!("Show / hide the log", "Показать / скрыть журнал"),
+        tr!("Help", "Помощь"),
+        tr!("Quit", "Выход"),
+        tr!("Switch to plain log", "Переключиться на обычный журнал"),
+        tr!("Reload settings from disk", "Перечитать настройки с диска"),
+        "Language / Язык",
+    ]
+}
+pub fn settings_fields() -> Vec<&'static str> {
+    vec![
+        tr!(
+            "Concurrent channels per account (1-2)",
+            "Каналов одновременно на аккаунт (1-2)"
+        ),
+        tr!(
+            "Balance polling, seconds (30-3600)",
+            "Опрос балансов, секунд (30-3600)"
+        ),
+        tr!(
+            "Watching interval, seconds (15-60)",
+            "Просмотр, секунд (15-60)"
+        ),
+        tr!("Claim bonuses (true/false)", "Забирать бонусы (true/false)"),
+        "Client ID Twitch",
+        tr!(
+            "OAuth scopes separated by spaces",
+            "OAuth scopes через пробел"
+        ),
+        tr!("Language (en/ru)", "Язык (en/ru)"),
+    ]
+}
 
 #[derive(Clone)]
 pub enum EditTarget {
@@ -101,6 +134,7 @@ pub enum Pick {
 }
 
 pub enum Overlay {
+    Language(usize),
     Menu(usize),
     Accounts {
         index: usize,
@@ -131,6 +165,7 @@ pub enum Overlay {
 }
 
 pub enum Action {
+    SetLanguage(crate::i18n::Language),
     Start,
     Stop,
     Status,
@@ -199,7 +234,7 @@ impl Controls {
         match &mut self.overlay {
             Some(Overlay::Menu(index)) => match key.code {
                 KeyCode::Up => *index = index.saturating_sub(1),
-                KeyCode::Down => *index = (*index + 1).min(MENU.len() - 1),
+                KeyCode::Down => *index = (*index + 1).min(menu_items().len() - 1),
                 KeyCode::Enter => {
                     let index = *index;
                     self.overlay = None;
@@ -216,7 +251,11 @@ impl Controls {
                         4 => return Some(Action::Login(None)),
                         5..=6 | 8..=9 => {
                             if profiles.is_empty() {
-                                self.notice = "Сначала добавьте аккаунт Twitch.".into();
+                                self.notice = tr!(
+                                    "Add a Twitch account first.",
+                                    "Сначала добавьте аккаунт Twitch."
+                                )
+                                .into();
                             } else {
                                 self.overlay = Some(Overlay::Pick {
                                     index: 0,
@@ -241,6 +280,7 @@ impl Controls {
                                     config.claim_bonus.to_string(),
                                     config.client_id.clone(),
                                     config.oauth_scopes.join(" "),
+                                    config.language.code().to_string(),
                                 ]
                                 .into_iter()
                                 .map(Editor::new)
@@ -252,7 +292,12 @@ impl Controls {
                         14 => self.overlay = Some(Overlay::Help),
                         15 => return Some(Action::Quit),
                         16 => return Some(Action::PlainLog),
-                        _ => return Some(Action::Reload),
+                        17 => return Some(Action::Reload),
+                        _ => {
+                            self.overlay = Some(Overlay::Language(usize::from(
+                                config.language == crate::i18n::Language::Ru,
+                            )));
+                        }
                     }
                 }
                 _ => {}
@@ -320,6 +365,18 @@ impl Controls {
                 }
                 _ => editors[*index].key(key),
             },
+            Some(Overlay::Language(index)) => match key.code {
+                KeyCode::Up | KeyCode::Left => *index = 0,
+                KeyCode::Down | KeyCode::Right => *index = 1,
+                KeyCode::Enter => {
+                    return Some(Action::SetLanguage(if *index == 1 {
+                        crate::i18n::Language::Ru
+                    } else {
+                        crate::i18n::Language::En
+                    }));
+                }
+                _ => {}
+            },
             Some(Overlay::Help) => {
                 if key.code == KeyCode::Enter {
                     self.overlay = None;
@@ -343,32 +400,33 @@ impl Controls {
 
 pub fn settings(config: &Config, values: &[String]) -> anyhow::Result<Config> {
     use anyhow::{Context, ensure};
-    ensure!(values.len() == 6, "Не хватает полей настроек");
+    ensure!(
+        matches!(values.len(), 6 | 7),
+        "{}",
+        tf!("Missing settings fields", "Не хватает полей настроек")
+    );
     crate::config::SettingsPatch {
-        max_channels: Some(
-            values[0]
-                .trim()
-                .parse()
-                .context("Укажите количество каналов числом")?,
-        ),
-        poll_interval_seconds: Some(
-            values[1]
-                .trim()
-                .parse()
-                .context("Укажите интервал опроса числом")?,
-        ),
-        watch_interval_seconds: Some(
-            values[2]
-                .trim()
-                .parse()
-                .context("Укажите интервал просмотра числом")?,
-        ),
-        claim_bonus: Some(
-            values[3]
-                .trim()
-                .parse()
-                .context("Для бонусов укажите true или false")?,
-        ),
+        language: values
+            .get(6)
+            .map(|value| value.parse())
+            .transpose()
+            .map_err(anyhow::Error::msg)?,
+        max_channels: Some(values[0].trim().parse().context(tr!(
+            "Enter the channel count as a number",
+            "Укажите количество каналов числом"
+        ))?),
+        poll_interval_seconds: Some(values[1].trim().parse().context(tr!(
+            "Enter the polling interval as a number",
+            "Укажите интервал опроса числом"
+        ))?),
+        watch_interval_seconds: Some(values[2].trim().parse().context(tr!(
+            "Enter the watching interval as a number",
+            "Укажите интервал просмотра числом"
+        ))?),
+        claim_bonus: Some(values[3].trim().parse().context(tr!(
+            "Use true or false for claiming bonuses",
+            "Для бонусов укажите true или false"
+        ))?),
         client_id: Some(values[4].clone()),
         oauth_scopes: Some(values[5].clone()),
     }
@@ -376,7 +434,14 @@ pub fn settings(config: &Config, values: &[String]) -> anyhow::Result<Config> {
 }
 
 pub fn config_path(text: &str) -> anyhow::Result<PathBuf> {
-    anyhow::ensure!(!text.trim().is_empty(), "Укажите путь к конфигурации");
+    anyhow::ensure!(
+        !text.trim().is_empty(),
+        "{}",
+        tf!(
+            "Specify the configuration path",
+            "Укажите путь к конфигурации"
+        )
+    );
     Ok(PathBuf::from(text.trim()))
 }
 

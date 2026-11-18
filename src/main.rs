@@ -1,3 +1,5 @@
+#[macro_use]
+mod i18n;
 mod accounts;
 mod app;
 mod auth;
@@ -12,7 +14,7 @@ mod twitch;
 mod ui;
 
 use anyhow::{Result, ensure};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use config::Config;
 use std::{
     io::{self, IsTerminal},
@@ -23,14 +25,16 @@ use std::{
 #[command(
     name = "twfarmer",
     version,
-    about = "Twitch: фарм баллов и управление аккаунтами в консоли"
+    about = tr!("Twitch: channel points farming and account management in the terminal", "Twitch: фарм баллов и управление аккаунтами в консоли")
 )]
 struct Cli {
+    #[arg(long = "lang", global = true, value_enum, help = tr!("Language for this run: en or ru", "Язык текущего запуска: en или ru"))]
+    lang: Option<i18n::Language>,
     #[arg(
         long,
         global = true,
         default_value = "twfarmer.toml",
-        help = "Путь к настройкам"
+        help = tr!("Settings file path", "Путь к настройкам")
     )]
     config: PathBuf,
     #[command(subcommand)]
@@ -38,89 +42,94 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
-    #[command(about = "Открыть интерфейс управления")]
+    #[command(about = tr!("Show or save the language: en or ru", "Показать или сохранить язык: en или ru"))]
+    Language {
+        #[arg(value_enum)]
+        language: Option<i18n::Language>,
+    },
+    #[command(about = tr!("Open the management interface", "Открыть интерфейс управления"))]
     Ui {
         #[arg(long)]
         journal: bool,
     },
-    #[command(about = "Запустить фарм в уже открытой программе")]
+    #[command(about = tr!("Start farming in the running program", "Запустить фарм в уже открытой программе"))]
     Start {
         #[arg(long = "account", value_delimiter = ',')]
         accounts: Vec<String>,
         #[arg(value_name = "CHANNELS")]
         channels: Vec<String>,
     },
-    #[command(about = "Остановить фарм в запущенной программе")]
+    #[command(about = tr!("Stop farming in the running program", "Остановить фарм в запущенной программе"))]
     Stop,
-    #[command(about = "Закрыть запущенную программу")]
+    #[command(about = tr!("Close the running program", "Закрыть запущенную программу"))]
     Quit,
-    #[command(about = "Перечитать настройки в запущенной программе")]
+    #[command(about = tr!("Reload settings in the running program", "Перечитать настройки в запущенной программе"))]
     Reload,
-    #[command(about = "Показать журнал или вернуть таблицу в запущенной программе")]
+    #[command(about = tr!("Show the log or restore the table in the running program", "Показать журнал или вернуть таблицу в запущенной программе"))]
     Journal {
         #[arg(long,default_value_t=true,action=clap::ArgAction::Set)]
         enabled: bool,
     },
-    #[command(about = "Просмотр и изменение настроек фарма")]
+    #[command(about = tr!("View and change farming settings", "Просмотр и изменение настроек фарма"))]
     Settings {
         #[command(subcommand)]
         command: SettingsCommand,
     },
-    #[command(about = "Создать настройки с общими каналами")]
+    #[command(about = tr!("Create settings with shared channels", "Создать настройки с общими каналами"))]
     Init {
         #[arg(value_name = "CHANNELS")]
         channels: Vec<String>,
     },
-    #[command(about = "Добавить аккаунт; имя определяется по Twitch автоматически")]
+    #[command(about = tr!("Add an account; its name is determined by Twitch", "Добавить аккаунт; имя определяется по Twitch автоматически"))]
     Login {
-        #[arg(long, help = "Логин Twitch для обновления существующего входа")]
+        #[arg(long, help = tr!("Twitch login of an existing account to renew", "Логин Twitch для обновления существующего входа"))]
         account: Option<String>,
     },
-    #[command(about = "Запустить фарм; в терминале открывается интерфейс управления")]
+    #[command(about = tr!("Start farming; opens the interface in an interactive terminal", "Запустить фарм; в терминале открывается интерфейс управления"))]
     Run {
         #[arg(value_name = "CHANNELS")]
         channels: Vec<String>,
         #[arg(
             long = "account",
             value_delimiter = ',',
-            help = "Логины Twitch через запятую"
+            help = tr!("Twitch logins separated by commas", "Логины Twitch через запятую")
         )]
         accounts: Vec<String>,
-        #[arg(long, help = "Обычный журнал без интерфейса")]
+        #[arg(long, help = tr!("Plain log without the interface", "Обычный журнал без интерфейса"))]
         no_ui: bool,
-        #[arg(long, help = "Открыть журнал вместо таблицы")]
+        #[arg(long, help = tr!("Open the log instead of the table", "Открыть журнал вместо таблицы"))]
         journal: bool,
     },
     #[command(
         alias = "service",
-        about = "Служебный запуск: только готовая конфигурация и сохранённые сессии"
+        about = tr!("Daemon startup: existing configuration and saved sessions only", "Служебный запуск: только готовая конфигурация и сохранённые сессии")
     )]
     Daemon {
         #[arg(
             long = "account",
             value_delimiter = ',',
-            help = "Сохранённые логины Twitch; иначе выбор из конфигурации"
+            help = tr!("Saved Twitch logins; otherwise use the configured selection", "Сохранённые логины Twitch; иначе выбор из конфигурации")
         )]
         accounts: Vec<String>,
     },
-    #[command(about = "Показать балансы аккаунтов без фарма")]
+    #[command(about = tr!("Show account balances without farming", "Показать балансы аккаунтов без фарма"))]
     Status {
         #[arg(long = "account", value_delimiter = ',')]
         accounts: Vec<String>,
     },
-    #[command(about = "Удалить локальную сессию аккаунта")]
+    #[command(about = tr!("Remove a local account session", "Удалить локальную сессию аккаунта"))]
     Logout {
-        #[arg(long, help = "Логин Twitch; можно опустить, если аккаунт один")]
+        #[arg(long, help = tr!("Twitch login; optional if there is only one account", "Логин Twitch; можно опустить, если аккаунт один"))]
         account: Option<String>,
     },
-    #[command(about = "Общие каналы; без аргументов показать список")]
+    #[command(about = tr!("Shared channels; show the list when no channels are provided", "Общие каналы; без аргументов показать список"))]
     Channels {
         #[arg(value_name = "CHANNELS")]
         channels: Vec<String>,
-        #[arg(long, conflicts_with = "channels", help = "Очистить общий список")]
+        #[arg(long, conflicts_with = "channels", help = tr!("Clear the shared list", "Очистить общий список"))]
         clear: bool,
     },
-    #[command(about = "Управление аккаунтами по логину Twitch")]
+    #[command(about = tr!("Manage accounts by Twitch login", "Управление аккаунтами по логину Twitch"))]
     Accounts {
         #[command(subcommand)]
         command: AccountsCommand,
@@ -128,26 +137,26 @@ enum Command {
 }
 #[derive(Subcommand)]
 enum AccountsCommand {
-    #[command(about = "Войти в аккаунт; необязательные аргументы — его личные каналы")]
+    #[command(about = tr!("Sign in; optional arguments set personal channels", "Войти в аккаунт; необязательные аргументы задают личные каналы"))]
     Add {
         #[arg(value_name = "CHANNELS")]
         channels: Vec<String>,
     },
-    #[command(about = "Показать аккаунты и списки каналов")]
+    #[command(about = tr!("Show accounts and their channel lists", "Показать аккаунты и списки каналов"))]
     List,
-    #[command(about = "Сохранить выбор аккаунтов; без логинов снять выбор")]
+    #[command(about = tr!("Save the account selection; no logins clears the selection", "Сохранить выбор аккаунтов; без логинов снять выбор"))]
     Select {
         #[arg(value_name = "TWITCH_LOGINS", value_delimiter = ',')]
         logins: Vec<String>,
-        #[arg(long, conflicts_with = "logins", help = "Использовать все аккаунты")]
+        #[arg(long, conflicts_with = "logins", help = tr!("Use all accounts", "Использовать все аккаунты"))]
         all: bool,
     },
-    #[command(about = "Удалить локальную сессию аккаунта")]
+    #[command(about = tr!("Remove a local account session", "Удалить локальную сессию аккаунта"))]
     Remove {
         #[arg(value_name = "TWITCH_LOGIN")]
         login: String,
     },
-    #[command(about = "Личные каналы аккаунта; без каналов вернуть общий список")]
+    #[command(about = tr!("Personal account channels; omit channels to use the shared list", "Личные каналы аккаунта; без каналов вернуть общий список"))]
     Channels {
         #[arg(value_name = "TWITCH_LOGIN")]
         login: String,
@@ -158,9 +167,9 @@ enum AccountsCommand {
 
 #[derive(Subcommand)]
 enum SettingsCommand {
-    #[command(about = "Показать настройки")]
+    #[command(about = tr!("Show settings", "Показать настройки"))]
     Show,
-    #[command(about = "Изменить указанные настройки")]
+    #[command(about = tr!("Change the specified settings", "Изменить указанные настройки"))]
     Set {
         #[command(flatten)]
         values: config::SettingsPatch,
@@ -169,18 +178,119 @@ enum SettingsCommand {
 
 #[tokio::main]
 async fn main() {
+    i18n::initialize(&std::env::args_os().collect::<Vec<_>>());
+    let mut command = localized_command(Cli::command());
+    let matches = command
+        .try_get_matches_from_mut(std::env::args_os())
+        .unwrap_or_else(|error| cli_error(error));
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     let result = tokio::select! {
-        result=execute(Cli::parse())=>Some(result),
+        result=execute(cli)=>Some(result),
         result=shutdown_signal()=>match result {Ok(())=>None,Err(error)=>Some(Err(error.into()))},
     };
     match result {
         Some(Err(error)) => {
-            eprintln!("Ошибка: {error:#}");
+            eprintln!("{}", tf!("Error: {error:#}", "Ошибка: {error:#}"));
             std::process::exit(1);
         }
-        None => println!("\nОстановлено."),
+        None => println!("{}", tf!("\nStopped.", "\nОстановлено.")),
         Some(Ok(())) => {}
     }
+}
+
+fn cli_error(error: clap::Error) -> ! {
+    if i18n::current() != i18n::Language::Ru || !error.use_stderr() {
+        error.exit();
+    }
+    use clap::error::{ContextKind, ErrorKind};
+    let reason = match error.kind() {
+        ErrorKind::UnknownArgument => "Неизвестный аргумент",
+        ErrorKind::InvalidSubcommand => "Неизвестная команда",
+        ErrorKind::InvalidValue | ErrorKind::ValueValidation => "Недопустимое значение параметра",
+        ErrorKind::MissingRequiredArgument => "Не указаны обязательные параметры",
+        ErrorKind::MissingSubcommand => "Не указана команда",
+        ErrorKind::ArgumentConflict => "Несовместимые параметры",
+        ErrorKind::TooManyValues | ErrorKind::TooFewValues | ErrorKind::WrongNumberOfValues => {
+            "Неверное количество значений"
+        }
+        ErrorKind::InvalidUtf8 => "Аргумент содержит некорректный UTF-8",
+        _ => "Неверные аргументы команды",
+    };
+    eprintln!("Ошибка: {reason}");
+    for (kind, label) in [
+        (ContextKind::InvalidArg, "Параметр"),
+        (ContextKind::InvalidSubcommand, "Команда"),
+        (ContextKind::InvalidValue, "Значение"),
+        (ContextKind::PriorArg, "Другой параметр"),
+        (ContextKind::ValidValue, "Допустимые значения"),
+    ] {
+        if let Some(value) = error.get(kind) {
+            eprintln!("{label}: {value}");
+        }
+    }
+    if let Some(usage) = error.get(ContextKind::Usage) {
+        eprintln!(
+            "\n{}",
+            usage.to_string().replacen("Usage:", "Использование:", 1)
+        );
+    }
+    eprintln!("\nДля справки используйте --help.");
+    std::process::exit(error.exit_code());
+}
+
+fn localized_command(mut command: clap::Command) -> clap::Command {
+    if command.get_name() == "help" {
+        command = command.about(tr!(
+            "Print help for a command",
+            "Показать справку по команде"
+        ));
+    }
+    command.build();
+    let arguments = command
+        .get_arguments()
+        .map(|arg| (arg.get_id().clone(), arg.is_positional()))
+        .collect::<Vec<_>>();
+    for (id, positional) in arguments {
+        command = command.mut_arg(id, |arg| {
+            let arg =
+                if i18n::current() == i18n::Language::Ru && !arg.get_default_values().is_empty() {
+                    let default = arg
+                        .get_default_values()
+                        .iter()
+                        .map(|value| value.to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let help = arg.get_help().map(ToString::to_string).unwrap_or_default();
+                    arg.help(format!("{help} [по умолчанию: {default}]"))
+                        .hide_default_value(true)
+                } else {
+                    arg
+                };
+            arg.hide_possible_values(i18n::current() == i18n::Language::Ru)
+                .help_heading(if positional {
+                    tr!("Arguments", "Аргументы")
+                } else {
+                    tr!("Options", "Параметры")
+                })
+        });
+    }
+    if command.get_arguments().any(|arg| arg.get_id() == "help") {
+        command = command.mut_arg("help", |arg| {
+            arg.help(tr!("Print help", "Показать справку"))
+        });
+    }
+    if command.get_arguments().any(|arg| arg.get_id() == "version") {
+        command = command.mut_arg("version", |arg| {
+            arg.help(tr!("Print version", "Показать версию"))
+        });
+    }
+    command
+        .subcommand_help_heading(tr!("Commands", "Команды"))
+        .help_template(tr!(
+            "{about-with-newline}\nUsage: {usage}\n\n{all-args}{after-help}",
+            "{about-with-newline}\nИспользование: {usage}\n\n{all-args}{after-help}"
+        ))
+        .mut_subcommands(localized_command)
 }
 
 async fn shutdown_signal() -> io::Result<()> {
@@ -216,20 +326,53 @@ fn one(profiles: &[accounts::Profile], login: Option<String>) -> Result<accounts
         return accounts::select(profiles, &[login])?
             .into_iter()
             .next()
-            .ok_or_else(|| anyhow::anyhow!("Аккаунт не найден"));
+            .ok_or_else(|| anyhow::anyhow!("{}", tf!("Account not found", "Аккаунт не найден")));
     }
     ensure!(
         profiles.len() == 1,
-        "Укажите логин Twitch через --account или выберите аккаунт в интерфейсе."
+        "{}",
+        tf!(
+            "Specify a Twitch login with --account or select an account in the interface.",
+            "Укажите логин Twitch через --account или выберите аккаунт в интерфейсе."
+        )
     );
     Ok(profiles[0].clone())
 }
 
 async fn execute(cli: Cli) -> Result<()> {
+    if let Some(language) = cli.lang {
+        i18n::set_override(Some(language));
+    }
     let terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
     match cli.command {
+        Some(Command::Language { language }) => {
+            let mut config = config_or_default(&cli.config)?;
+            if let Some(language) = language {
+                config.language = language;
+                config.save(&cli.config)?;
+                i18n::set_override(None);
+                i18n::apply_config(language);
+                local::notify_reload(&cli.config).await?;
+            }
+            println!(
+                "{}",
+                tf!(
+                    "Language: {} ({})",
+                    "Язык: {} ({})",
+                    config.language.name(),
+                    config.language
+                )
+            );
+        }
         Some(Command::Ui { journal }) => {
-            ensure!(terminal, "Интерфейсу нужен интерактивный терминал.");
+            ensure!(
+                terminal,
+                "{}",
+                tf!(
+                    "The interface requires an interactive terminal.",
+                    "Интерфейсу нужен интерактивный терминал."
+                )
+            );
             app::run(cli.config, false, vec![], vec![], journal, false).await?;
         }
         None if terminal => app::run(cli.config, false, vec![], vec![], false, false).await?,
@@ -279,13 +422,20 @@ async fn execute(cli: Cli) -> Result<()> {
             SettingsCommand::Set { values } => {
                 let next = values.apply(&config_or_default(&cli.config)?)?;
                 next.save(&cli.config)?;
+                i18n::apply_config(next.language);
                 local::notify_reload(&cli.config).await?;
-                println!("Настройки сохранены.");
+                println!("{}", tf!("Settings saved.", "Настройки сохранены."));
             }
         },
         Some(Command::Init { channels }) => {
             Config::create(&cli.config, &channels)?;
-            println!("Настройки созданы. Запустите twfarmer для управления через интерфейс.");
+            println!(
+                "{}",
+                tf!(
+                    "Settings created. Run twfarmer to manage them in the interface.",
+                    "Настройки созданы. Запустите twfarmer для управления через интерфейс."
+                )
+            );
         }
         Some(Command::Login { account }) => {
             let (mut config, profiles) = prepared(&cli.config).await?;
@@ -306,17 +456,38 @@ async fn execute(cli: Cli) -> Result<()> {
             let profile = one(&profiles, account)?;
             accounts::remove_and_save(&cli.config, &mut config, &profile)?;
             local::notify_reload(&cli.config).await?;
-            println!("Аккаунт {}: локальная сессия удалена.", profile.name);
+            println!(
+                "{}",
+                tf!(
+                    "Account {}: local session removed.",
+                    "Аккаунт {}: локальная сессия удалена.",
+                    profile.name
+                )
+            );
         }
         Some(Command::Channels { channels, clear }) => {
             let mut config = config_or_default(&cli.config)?;
             if channels.is_empty() && !clear {
-                println!("Общие каналы: {}", config.channels.join(", "));
+                println!(
+                    "{}",
+                    tf!(
+                        "Shared channels: {}",
+                        "Общие каналы: {}",
+                        config.channels.join(", ")
+                    )
+                );
             } else {
                 config.channels = config::normalize_channels(&channels)?;
                 config.save(&cli.config)?;
                 local::notify_reload(&cli.config).await?;
-                println!("Общие каналы сохранены: {}.", config.channels.join(", "));
+                println!(
+                    "{}",
+                    tf!(
+                        "Shared channels saved: {}.",
+                        "Общие каналы сохранены: {}.",
+                        config.channels.join(", ")
+                    )
+                );
             }
         }
         Some(Command::Accounts { command }) => match command {
@@ -342,7 +513,10 @@ async fn execute(cli: Cli) -> Result<()> {
                 let (mut config, profiles) = prepared(&cli.config).await?;
                 accounts::select_and_save(&cli.config, &mut config, &profiles, &logins, all)?;
                 local::notify_selection(&cli.config).await?;
-                println!("Выбор аккаунтов сохранён.");
+                println!(
+                    "{}",
+                    tf!("Account selection saved.", "Выбор аккаунтов сохранён.")
+                );
             }
             AccountsCommand::List => {
                 let (config, profiles) = prepared(&cli.config).await?;
@@ -353,7 +527,14 @@ async fn execute(cli: Cli) -> Result<()> {
                 let profile = one(&profiles, Some(login))?;
                 accounts::remove_and_save(&cli.config, &mut config, &profile)?;
                 local::notify_reload(&cli.config).await?;
-                println!("Аккаунт {}: локальная сессия удалена.", profile.name);
+                println!(
+                    "{}",
+                    tf!(
+                        "Account {}: local session removed.",
+                        "Аккаунт {}: локальная сессия удалена.",
+                        profile.name
+                    )
+                );
             }
             AccountsCommand::Channels { login, channels } => {
                 let (mut config, profiles) = prepared(&cli.config).await?;
@@ -411,7 +592,7 @@ async fn execute(cli: Cli) -> Result<()> {
                         "[{}] {}: {}",
                         account.name,
                         view.name,
-                        view.error.as_deref().unwrap_or("Ошибка")
+                        view.error.as_deref().unwrap_or(tr!("Error", "Ошибка"))
                     );
                 } else {
                     println!(
@@ -419,12 +600,21 @@ async fn execute(cli: Cli) -> Result<()> {
                         account.name,
                         view.name,
                         view.status.label(),
-                        view.balance
-                            .map_or_else(|| "—".into(), |balance| format!("{balance} баллов"))
+                        view.balance.map_or_else(
+                            || "-".into(),
+                            |balance| tf!("{balance} points", "{balance} баллов")
+                        )
                     );
                 }
             }
-            ensure!(!failed, "Не удалось получить часть балансов.");
+            ensure!(
+                !failed,
+                "{}",
+                tf!(
+                    "Could not retrieve some balances.",
+                    "Не удалось получить часть балансов."
+                )
+            );
         }
         None => app::run(cli.config, true, vec![], vec![], false, true).await?,
     }
