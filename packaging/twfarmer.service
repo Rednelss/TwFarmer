@@ -1,0 +1,19 @@
+[Unit]
+Description=TwFarmer — Twitch channel points for saved accounts
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.config/twfarmer
+ExecStart=%h/.local/bin/twfarmer --config %h/.config/twfarmer/twfarmer.toml daemon
+ExecReload=%h/.local/bin/twfarmer --config %h/.config/twfarmer/twfarmer.toml reload
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=15
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+UMask=0077
+
+[Install]
+WantedBy=default.target

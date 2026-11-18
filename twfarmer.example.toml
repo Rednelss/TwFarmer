@@ -1,11 +1,15 @@
-# Каналы в порядке приоритета: первые два онлайн получают просмотр.
-channels = ["twitch", "shroud"]
+# Общие каналы в порядке приоритета.
+channels = ["welovegames", "betboom_cs_ru"]
+# Необязательный сохранённый выбор по логинам Twitch.
+# enabled_accounts = ["twitch_user"]
+
 max_channels = 2
 poll_interval_seconds = 60
 watch_interval_seconds = 20
 claim_bonus = true
-
-# Публичный идентификатор TV-клиента Twitch, используемого для входа.
-# Это не секрет. Внутренние интерфейсы Twitch могут измениться.
 client_id = "ue6666qo983tsx6so1t0vnawi233wa"
 oauth_scopes = ["user_read"]
+
+# Личные списки полностью заменяют общий для выбранного аккаунта.
+[account_channels]
+# twitch_user = ["lizabaktt", "morkovushkaa"]

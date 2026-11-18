@@ -75,6 +75,7 @@ impl Twitch {
             "client_id изменился. Выполните twfarmer login."
         );
         let identity = auth::ensure_valid(&client, &mut auth, &auth_path).await?;
+        auth::sync_identity(&mut auth, &identity, &auth_path)?;
         Ok(Self {
             client,
             auth,
@@ -87,6 +88,7 @@ impl Twitch {
 
     pub async fn validate(&mut self) -> Result<()> {
         self.identity = auth::ensure_valid(&self.client, &mut self.auth, &self.auth_path).await?;
+        auth::sync_identity(&mut self.auth, &self.identity, &self.auth_path)?;
         Ok(())
     }
 

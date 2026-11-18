@@ -15,6 +15,10 @@ pub struct Auth {
     pub refresh_token: Option<String>,
     pub client_id: String,
     pub device_id: String,
+    #[serde(default)]
+    pub login: Option<String>,
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -44,17 +48,14 @@ struct Tokens {
 pub struct SessionExpired;
 impl std::fmt::Display for SessionExpired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Сессия Twitch недействительна. Выполните twfarmer login."
-        )
+        write!(f, "Сессия Twitch недействительна. Обновите вход в аккаунт.")
     }
 }
 impl std::error::Error for SessionExpired {}
 
 pub fn read(path: &Path) -> Result<Auth> {
-    let bytes = fs::read(path).context("Нет сохранённой сессии. Выполните twfarmer login.")?;
-    serde_json::from_slice(&bytes).context("Файл сессии повреждён. Выполните twfarmer login.")
+    let bytes = fs::read(path).context("Нет сохранённой сессии. Добавьте аккаунт.")?;
+    serde_json::from_slice(&bytes).context("Файл сессии повреждён. Обновите вход в аккаунт.")
 }
 
 pub fn save(path: &Path, auth: &Auth) -> Result<()> {
@@ -69,6 +70,17 @@ pub fn save(path: &Path, auth: &Auth) -> Result<()> {
     file.as_file().sync_all()?;
     file.persist(path)
         .map_err(|_| anyhow::anyhow!("Не удалось сохранить файл сессии"))?;
+    Ok(())
+}
+
+pub fn sync_identity(auth: &mut Auth, identity: &Identity, path: &Path) -> Result<()> {
+    if auth.login.as_deref() != Some(identity.login.as_str())
+        || auth.user_id.as_deref() != Some(identity.user_id.as_str())
+    {
+        auth.login = Some(identity.login.clone());
+        auth.user_id = Some(identity.user_id.clone());
+        save(path, auth)?;
+    }
     Ok(())
 }
 
@@ -163,7 +175,20 @@ async fn refresh_at(client: &Client, auth: &mut Auth, path: &Path, endpoint: &st
     save(path, auth)
 }
 
-pub async fn login(client: &Client, config: &Config, path: &Path) -> Result<Identity> {
+pub async fn authorize(client: &Client, config: &Config) -> Result<(Auth, Identity)> {
+    authorize_with(client, config, |uri, code| {
+        println!("Откройте в браузере: {uri}");
+        println!("Код входа: {code}. Подтвердите вход на сайте Twitch.");
+        println!("Ожидаю подтверждение; Ctrl+C — отмена.");
+    })
+    .await
+}
+
+pub async fn authorize_with(
+    client: &Client,
+    config: &Config,
+    mut show: impl FnMut(String, String) + Send,
+) -> Result<(Auth, Identity)> {
     let device_id = uuid::Uuid::new_v4().simple().to_string();
     let response = client
         .post(DEVICE)
@@ -192,12 +217,7 @@ pub async fn login(client: &Client, config: &Config, path: &Path) -> Result<Iden
         uri.scheme() == "https" && matches!(uri.host_str(), Some("twitch.tv" | "www.twitch.tv")),
         "Неверный адрес авторизации Twitch"
     );
-    println!("Откройте в браузере: {}", device.verification_uri);
-    println!(
-        "Код входа: {}. Подтвердите вход на сайте Twitch.",
-        device.user_code
-    );
-    println!("Ожидаю подтверждение; Ctrl+C — отмена.");
+    show(device.verification_uri.clone(), device.user_code.clone());
     let deadline = Instant::now() + Duration::from_secs(device.expires_in);
     let mut interval = device.interval.clamp(1, 60);
     loop {
@@ -228,15 +248,18 @@ pub async fn login(client: &Client, config: &Config, path: &Path) -> Result<Iden
         let status = response.status();
         if status.is_success() {
             let tokens: Tokens = response.json().await.context("Неверный ответ входа")?;
-            let auth = Auth {
+            let mut auth = Auth {
                 access_token: tokens.access_token,
                 refresh_token: tokens.refresh_token,
                 client_id: config.client_id.clone(),
                 device_id,
+                login: None,
+                user_id: None,
             };
             let identity = validate(client, &auth).await?;
-            save(path, &auth)?;
-            return Ok(identity);
+            auth.login = Some(identity.login.clone());
+            auth.user_id = Some(identity.user_id.clone());
+            return Ok((auth, identity));
         }
         if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
             interval = (interval + 5).min(60);
@@ -362,6 +385,8 @@ mod tests {
             refresh_token: Some("test-refresh-token".into()),
             client_id: "test-client".into(),
             device_id: "test-device".into(),
+            login: None,
+            user_id: None,
         }
     }
 
@@ -453,6 +478,8 @@ mod tests {
             refresh_token: None,
             client_id: "client".into(),
             device_id: "device".into(),
+            login: None,
+            user_id: None,
         };
         save(&path, &auth).unwrap();
         assert_eq!(read(&path).unwrap().access_token, "test-only");

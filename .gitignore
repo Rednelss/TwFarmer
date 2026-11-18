@@ -1,4 +1,9 @@
 /target/
+/dist/
+__pycache__/
 *.auth.json
 *.auth.json.*
 twfarmer.toml
+*.accounts/
+*.control.json
+*.control.lock
