@@ -58,6 +58,23 @@ class ReleasePackagingTests(unittest.TestCase):
                 package(self.root, self.binary, 'x86_64-unknown-linux-gnu', self.output, '0.1.0')
         self.assertFalse(self.output.exists())
 
+    def test_tar_permissions_do_not_depend_on_host_permissions(self):
+        gettarinfo = tarfile.TarFile.gettarinfo
+
+        def windows_metadata(bundle, *args, **kwargs):
+            entry = gettarinfo(bundle, *args, **kwargs)
+            entry.mode = 0o666 if entry.isfile() else 0o777
+            return entry
+
+        for target in ['aarch64-apple-darwin', 'x86_64-unknown-linux-gnu']:
+            with self.subTest(target=target), patch('package_release.subprocess.check_output', return_value='twfarmer 0.1.0\n'), patch('tarfile.TarFile.gettarinfo', windows_metadata):
+                archive = package(self.root, self.binary, target, self.output, '0.1.0')
+                executable = f'twfarmer-v0.1.0-{target}/twfarmer'
+                with tarfile.open(archive) as bundle:
+                    for entry in bundle.getmembers():
+                        expected = 0o755 if entry.isdir() or entry.name == executable else 0o644
+                        self.assertEqual(entry.mode & 0o777, expected, entry.name)
+
     def test_public_file_cannot_be_replaced_with_a_symlink_to_credentials(self):
         license_path = self.root / 'LICENSE'
         license_path.unlink()

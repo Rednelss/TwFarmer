@@ -58,8 +58,14 @@ def package(root: Path, binary: Path, target: str, output: Path, version: str) -
                         bundle.write(file, file.relative_to(Path(temporary)).as_posix())
         else:
             archive = output / f'{name}.tar.gz'
+
+            def archive_permissions(entry: tarfile.TarInfo) -> tarfile.TarInfo:
+                # Windows chmod does not provide Unix executable bits.
+                entry.mode = 0o755 if entry.isdir() or entry.name == f'{name}/{executable}' else 0o644
+                return entry
+
             with tarfile.open(archive, 'w:gz') as bundle:
-                bundle.add(stage, arcname=name)
+                bundle.add(stage, arcname=name, filter=archive_permissions)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     checksum = archive.with_name(archive.name + '.sha256')
     checksum.write_bytes(f'{digest}  {archive.name}\n'.encode('utf-8'))
