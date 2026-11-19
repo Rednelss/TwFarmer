@@ -3,12 +3,25 @@ name: Release
 on:
   push:
     tags: ['v*']
+  release:
+    types: [published]
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
   check:
+    if: >-
+      github.event_name != 'release' || !(
+        contains(github.event.release.assets.*.name, 'SHA256SUMS') &&
+        contains(github.event.release.assets.*.name, format('twfarmer-{0}-x86_64-unknown-linux-gnu.tar.gz', github.ref_name)) &&
+        contains(github.event.release.assets.*.name, format('twfarmer-{0}-x86_64-pc-windows-msvc.zip', github.ref_name)) &&
+        contains(github.event.release.assets.*.name, format('twfarmer-{0}-aarch64-apple-darwin.tar.gz', github.ref_name))
+      )
     uses: ./.github/workflows/ci.yml
 
   build:
@@ -48,8 +61,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  draft:
-    name: Create draft release
+  publish:
+    name: Upload release assets
     needs: build
     runs-on: ubuntu-22.04
     permissions:
@@ -68,7 +81,7 @@ jobs:
           cat *.sha256 > SHA256SUMS
           sha256sum --check SHA256SUMS
           rm -- *.sha256
-      - name: Create draft with all archives
+      - name: Upload assets or create a draft
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
@@ -83,4 +96,8 @@ jobs:
               encoding='utf-8',
           )
           PY
-          gh release create "$RELEASE_TAG" dist/* --draft --verify-tag --title "TwFarmer $RELEASE_TAG" --notes-file "$RUNNER_TEMP/twfarmer-release-notes.md"
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* --draft --verify-tag --title "TwFarmer $RELEASE_TAG" --notes-file "$RUNNER_TEMP/twfarmer-release-notes.md"
+          fi

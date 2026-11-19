@@ -24,6 +24,16 @@
 
 ## GitHub Release
 
+To release from the GitHub website, first push the checked changes to `main`.
+Open **Releases > Draft a new release**, choose **v0.1.0** as a new tag and
+**main** as its target, enter a title and description, and click **Publish release**.
+For later versions, use a tag that matches `Cargo.toml`.
+Publishing starts the `Release` workflow; saving a draft does not.
+After the checks and builds finish, archives and `SHA256SUMS` are attached to
+that release. The release is public while the build runs.
+
+To start a build from the terminal:
+
 Commit the checked changes and push `main`, then create a tag matching the
 package version. For the first release:
 
@@ -44,9 +54,12 @@ compatibility, and verifies that the tag matches `Cargo.toml`. It builds:
 After a successful build, a **draft** GitHub Release appears with archives,
 `SHA256SUMS`, and bilingual notes from `packaging/RELEASE_NOTES.md` and
 `packaging/RELEASE_NOTES.ru.md`. Review the draft and attachments, then publish it.
-The workflow does not overwrite an existing release with the same tag.
+If the release already exists, the workflow uploads the assets without changing
+its description or publication status. Rerunning replaces generated assets with
+the same names. Publishing a draft that already has all three archives and
+`SHA256SUMS` skips the build.
 
-GitHub Actions must be enabled in the repository. Only the draft creation job
+GitHub Actions must be enabled in the repository. Only the asset publication job
 receives `contents: write`; no personal access token is needed.
 Publishing to crates.io is disabled.
 
