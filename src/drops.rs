@@ -2,6 +2,43 @@ use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashMap;
+
+pub const LINKS_QUERY: &str =
+    "query { currentUser { id dropCampaigns { id self { isAccountConnected } } } }";
+
+pub fn campaign_links(data: &Value, user_id: &str) -> Result<Option<HashMap<String, bool>>> {
+    ensure!(
+        data.pointer("/currentUser/id").and_then(Value::as_str) == Some(user_id),
+        "{}",
+        tf!(
+            "Twitch returned campaign links for a different account",
+            "Twitch вернул привязки кампаний другого аккаунта"
+        )
+    );
+    let Some(value) = data
+        .pointer("/currentUser/dropCampaigns")
+        .filter(|v| !v.is_null())
+    else {
+        return Ok(None);
+    };
+    let campaigns = value.as_array().context(tr!(
+        "Invalid campaign links response",
+        "Неверный ответ привязок кампаний"
+    ))?;
+    let mut links = HashMap::new();
+    for campaign in campaigns {
+        if let (Some(id), Some(linked)) = (
+            campaign["id"].as_str(),
+            campaign
+                .pointer("/self/isAccountConnected")
+                .and_then(Value::as_bool),
+        ) {
+            links.insert(id.to_owned(), linked);
+        }
+    }
+    Ok(Some(links))
+}
 
 pub const FIELDS: &str = r#"
     id name startAt endAt
@@ -53,6 +90,8 @@ pub struct Campaign {
     start_at: DateTime<Utc>,
     end_at: DateTime<Utc>,
     reward_groups: Vec<Group>,
+    #[serde(skip)]
+    account_connected: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -287,16 +326,28 @@ impl Drop {
     }
 }
 
-pub fn parse(data: &Value, channel_id: &str, game_id: Option<&str>) -> Result<Vec<Drop>> {
+pub fn parse(
+    data: &Value,
+    channel_id: &str,
+    game_id: Option<&str>,
+    links: Option<&HashMap<String, bool>>,
+) -> Result<Vec<Drop>> {
     let value = data.get("channelDropCampaignsProgress").context(tr!(
         "Twitch did not return Drops progress",
         "Twitch не вернул прогресс Drops"
     ))?;
-    let campaigns = parse_campaigns(value)?;
+    let mut campaigns = parse_campaigns(value)?;
+    apply_links(&mut campaigns, links);
     Ok(campaigns
         .into_iter()
         .flat_map(|c| c.drops(channel_id, game_id, Utc::now()))
         .collect())
+}
+
+pub fn apply_links(campaigns: &mut [Campaign], links: Option<&HashMap<String, bool>>) {
+    for campaign in campaigns {
+        campaign.account_connected = links.and_then(|links| links.get(&campaign.id)).copied();
+    }
 }
 
 pub fn parse_campaigns(value: &Value) -> Result<Vec<Campaign>> {
@@ -348,13 +399,13 @@ impl Campaign {
             !matches!(
                 r.distribution_type.as_str(),
                 "BADGE" | "EMOTE" | "CODE" | "POOL"
-            ) && r.is_account_connected == Some(false)
+            ) && self.account_connected.or(r.is_account_connected) == Some(false)
         });
         let link_unknown = group.rewards.iter().any(|r| {
             !matches!(
                 r.distribution_type.as_str(),
                 "BADGE" | "EMOTE" | "CODE" | "POOL"
-            ) && r.is_account_connected.is_none()
+            ) && self.account_connected.or(r.is_account_connected).is_none()
         });
         let choice_required = group
             .rewards
@@ -402,9 +453,10 @@ impl Campaign {
                 DropStatus::Waiting(window_end.unwrap())
             }
             Some(_) if current_reward_earned && window_end.is_none() => DropStatus::AwaitingReset,
-            // Counted watch time confirms progress even when the link flag disagrees.
+            // Counted progress only overrides reward flags when campaign linkage is unknown.
             Some(p)
                 if p.status == "IN_PROGRESS"
+                    && self.account_connected != Some(false)
                     && p.current_minutes_watched.is_some_and(|minutes| minutes > 0)
                     && criteria.is_auto_progressable
                     && !choice_required
@@ -417,7 +469,8 @@ impl Campaign {
             _ if paid => DropStatus::Subscription,
             _ if choice_required || !criteria.is_auto_progressable => DropStatus::Conditions,
             Some(p) if p.status == "IN_PROGRESS" => DropStatus::Watching,
-            None => DropStatus::Unknown,
+            // A linked reward may have no viewer progress before its first watch event.
+            None => DropStatus::Watching,
             _ => DropStatus::Unknown,
         };
         Some(Drop {
@@ -693,6 +746,130 @@ mod tests {
     }
 
     #[test]
+    fn linked_first_view_does_not_require_a_progress_record() {
+        let now = Utc::now();
+        let mut value = window_campaign(now);
+        value["rewardGroups"][0]["rewards"][0]["distributionType"] = json!("DIRECT_ENTITLEMENT");
+        value["rewardGroups"][0]["rewards"][0]["pool"] = Value::Null;
+        value["rewardGroups"][0]["rewards"][0]["isAccountConnected"] = json!(true);
+        value["rewardGroups"][0]["self"] = Value::Null;
+        let drop = drops_at(value.clone(), now).pop().unwrap();
+        assert!(drop.pending());
+        assert_eq!(drop.minutes, None);
+        assert!(drop.claim_id("viewer").is_none());
+        assert!(
+            catalog(vec![serde_json::from_value(value.clone()).unwrap()])[0]
+                .drop
+                .pending()
+        );
+
+        value["rewardGroups"][0]["rewards"][0]["isAccountConnected"] = json!(false);
+        assert_eq!(
+            drops_at(value.clone(), now)[0].status,
+            DropStatus::LinkRequired
+        );
+        value["rewardGroups"][0]["rewards"][0]["isAccountConnected"] = Value::Null;
+        assert_eq!(drops_at(value.clone(), now)[0].status, DropStatus::Unknown);
+        value["rewardGroups"][0]["rewards"][0]["isAccountConnected"] = json!(true);
+        value["rewardGroups"][0]["progressCriteria"]["requirements"]["subs"] = json!(1);
+        assert!(drops_at(value, now).is_empty());
+    }
+
+    #[test]
+    fn campaign_links_allow_first_view_and_keep_same_publisher_games_separate() {
+        let now = Utc::now();
+        let mut linked = window_campaign(now);
+        linked["id"] = json!("game-a");
+        linked["name"] = json!("Publisher / Game A");
+        linked["rewardGroups"][0]["self"] = Value::Null;
+        linked["rewardGroups"][0]["rewards"][0]["distributionType"] = json!("DIRECT_ENTITLEMENT");
+        linked["rewardGroups"][0]["rewards"][0]["pool"] = Value::Null;
+        linked["rewardGroups"][0]["rewards"][0]["isAccountConnected"] = json!(false);
+        let mut unlinked = linked.clone();
+        unlinked["id"] = json!("game-b");
+        unlinked["name"] = json!("Publisher / Game B");
+        let links = campaign_links(
+            &json!({"currentUser": {"id": "viewer", "dropCampaigns": [
+                {"id": "game-a", "self": {"isAccountConnected": true}},
+                {"id": "game-b", "self": {"isAccountConnected": false}}
+            ]}}),
+            "viewer",
+        )
+        .unwrap()
+        .unwrap();
+        let data = json!({"channelDropCampaignsProgress": [linked.clone(), unlinked.clone()]});
+        let drops = parse(&data, "channel", Some("gta"), Some(&links)).unwrap();
+        assert!(drops[0].pending());
+        assert_eq!(drops[0].minutes, None);
+        assert!(drops[0].claim_id("viewer").is_none());
+        assert_eq!(drops[1].status, DropStatus::LinkRequired);
+        let mut campaigns = parse_campaigns(&json!([linked, unlinked])).unwrap();
+        apply_links(&mut campaigns, Some(&links));
+        let entries = catalog(campaigns);
+        assert!(entries[0].drop.pending());
+        assert_eq!(entries[1].drop.status, DropStatus::LinkRequired);
+        let mut data = data;
+        data["channelDropCampaignsProgress"][1]["rewardGroups"][0]["self"] = json!({
+            "status": "IN_PROGRESS", "currentMinutesWatched": 12, "grantCount": 0,
+            "hasPreconditionsMet": true
+        });
+        data["channelDropCampaignsProgress"][1]["rewardGroups"][0]["rewards"][0]["isAccountConnected"] =
+            json!(true);
+        assert_eq!(
+            parse(&data, "channel", Some("gta"), Some(&links)).unwrap()[1].status,
+            DropStatus::LinkRequired
+        );
+        data["channelDropCampaignsProgress"][0]["rewardGroups"][0]["progressCriteria"]["requirements"]
+            ["subs"] = json!(1);
+        assert_eq!(
+            parse(&data, "channel", Some("gta"), Some(&links))
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn absent_links_are_not_negative_and_account_results_are_independent() {
+        assert!(
+            campaign_links(
+                &json!({"currentUser": {"id": "viewer", "dropCampaigns": null}}),
+                "viewer"
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            campaign_links(
+                &json!({"currentUser": {"id": "viewer", "dropCampaigns": []}}),
+                "viewer"
+            )
+            .unwrap()
+            .unwrap()
+            .is_empty()
+        );
+        assert!(
+            campaign_links(
+                &json!({"currentUser": {"id": "other", "dropCampaigns": []}}),
+                "viewer"
+            )
+            .is_err()
+        );
+        let now = Utc::now();
+        let mut value = window_campaign(now);
+        value["rewardGroups"][0]["rewards"][0]["distributionType"] = json!("DIRECT_ENTITLEMENT");
+        value["rewardGroups"][0]["rewards"][0]["pool"] = Value::Null;
+        value["rewardGroups"][0]["self"] = Value::Null;
+        let mut campaigns = parse_campaigns(&json!([value.clone()])).unwrap();
+        let id = campaigns[0].id.clone();
+        apply_links(&mut campaigns, Some(&HashMap::from([(id.clone(), true)])));
+        assert!(catalog(campaigns)[0].drop.pending());
+        let mut campaigns = parse_campaigns(&json!([value])).unwrap();
+        apply_links(&mut campaigns, Some(&HashMap::from([(id, false)])));
+        assert_eq!(catalog(campaigns)[0].drop.status, DropStatus::LinkRequired);
+    }
+
+    #[test]
     fn counted_progress_and_claimable_status_override_a_stale_link_flag() {
         let mut value = campaign();
         value["rewardGroups"][0]["rewards"][0]["distributionType"] = json!("DIRECT_ENTITLEMENT");
@@ -758,16 +935,19 @@ mod tests {
         assert_eq!(drops(value)[0].minutes, None);
         let mut value = campaign();
         value["rewardGroups"][0]["self"] = Value::Null;
-        assert_eq!(drops(value)[0].status, DropStatus::Unknown);
+        let first_view = drops(value).pop().unwrap();
+        assert!(first_view.pending());
+        assert_eq!(first_view.minutes, None);
         let mut value = campaign();
         value["endAt"] = json!("2026-11-21T12:00:00Z");
         assert!(drops(value).is_empty());
-        assert!(parse(&json!({}), "channel", Some("gta")).is_err());
+        assert!(parse(&json!({}), "channel", Some("gta"), None).is_err());
         assert!(
             parse(
                 &json!({"channelDropCampaignsProgress": null}),
                 "channel",
-                Some("gta")
+                Some("gta"),
+                None
             )
             .unwrap()
             .is_empty()

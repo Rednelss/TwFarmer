@@ -213,8 +213,8 @@ pub fn save_session(
             ),
             "{}",
             tf!(
-                "A different account was selected in the browser. Sign in as {}.",
-                "В браузере выбран другой аккаунт. Войдите как {}.",
+                "This session belongs to a different account. Sign in as {}.",
+                "Эта сессия принадлежит другому аккаунту. Войдите как {}.",
                 expected.name
             )
         );
@@ -233,19 +233,24 @@ pub fn save_session(
     Ok(identity.login.clone())
 }
 
-pub async fn login(
-    config_path: &Path,
-    config: &Config,
-    expected: Option<&Profile>,
-) -> Result<String> {
+pub async fn login(config_path: &Path, expected: Option<&Profile>) -> Result<String> {
     println!(
         "{}",
         tf!(
-            "Select the intended Twitch account in your browser.",
-            "В браузере выберите нужный аккаунт Twitch."
+            "Open the link on your own device and sign in to Twitch:",
+            "Откройте ссылку на своём устройстве и войдите в Twitch:"
         )
     );
-    let (session, identity) = auth::authorize(&twitch::http_client()?, config).await?;
+    crate::ui::print_login_url()?;
+    println!(
+        "{}",
+        tf!(
+            "Copy the resulting URL containing #access_token= and paste it below.\n",
+            "Скопируйте полученный адрес с #access_token= и вставьте ниже.\n"
+        )
+    );
+    let input = crate::control::read_secret()?;
+    let (session, identity) = twitch::Twitch::import_token(&input).await?;
     let login = save_session(config_path, &session, &identity, expected)?;
     println!(
         "{}",

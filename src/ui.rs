@@ -7,7 +7,8 @@ use crate::{
 use anyhow::{Context, Result};
 use crossterm::{
     event::{DisableBracketedPaste, EnableBracketedPaste},
-    execute,
+    execute, queue,
+    style::{Attribute, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
@@ -23,7 +24,7 @@ use ratatui::{
 };
 use std::{
     collections::HashSet,
-    io::{self, Stdout},
+    io::{self, IsTerminal, Stdout, Write},
     path::Path,
 };
 
@@ -36,6 +37,38 @@ const SUCCESS: Color = Color::Rgb(121, 213, 159);
 const WARNING: Color = Color::Rgb(238, 196, 106);
 const ERROR: Color = Color::Rgb(247, 144, 137);
 use tokio::time::Instant;
+
+fn url_style(writer: &mut impl Write) -> io::Result<()> {
+    queue!(
+        writer,
+        SetForegroundColor(ACCENT.into()),
+        SetBackgroundColor(BACKGROUND.into()),
+        SetAttribute(Attribute::Bold)
+    )
+}
+
+pub fn print_login_url() -> io::Result<()> {
+    let stdout = io::stdout();
+    let interactive =
+        stdout.is_terminal() && !std::env::var("TERM").is_ok_and(|term| term == "dumb");
+    let mut writer = stdout.lock();
+    writeln!(writer)?;
+    if interactive {
+        url_style(&mut writer)?;
+    }
+    writeln!(writer, "{}", crate::auth::NATIVE_LOGIN_URL)?;
+    if interactive {
+        queue!(writer, SetAttribute(Attribute::Reset), ResetColor)?;
+    }
+    writeln!(writer)?;
+    writeln!(
+        writer,
+        "{}",
+        tr!("F2: copy the complete URL", "F2: скопировать полный адрес")
+    )?;
+    writeln!(writer)?;
+    writer.flush()
+}
 
 pub struct Screen {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -529,6 +562,80 @@ fn input_line(editor: &crate::control::Editor, width: usize) -> String {
     format!("{before}▏{after}")
 }
 
+fn render_token_form(
+    frame: &mut Frame,
+    area: Rect,
+    editor: &crate::control::Editor,
+    expected: Option<&str>,
+    controls: &Controls,
+) {
+    let url_rows = crate::auth::NATIVE_LOGIN_URL
+        .len()
+        .div_ceil(area.width.saturating_sub(2).max(1) as usize);
+    let url_height = (url_rows as u16 + 2).min(area.height.saturating_sub(5));
+    let parts = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(url_height),
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(2),
+    ])
+    .split(area);
+    frame.render_widget(
+        Paragraph::new(tr!(
+            "Open on your own device:",
+            "Откройте на своём устройстве:"
+        )),
+        parts[0],
+    );
+    frame.render_widget(
+        Paragraph::new(crate::auth::NATIVE_LOGIN_URL)
+            .style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
+            .wrap(Wrap { trim: false })
+            .scroll((controls.instructions_scroll, 0))
+            .block(
+                Block::default()
+                    .title(tr!(
+                        " Sign-in URL • F2: copy ",
+                        " Ссылка входа • F2: копировать "
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(ACCENT)),
+            ),
+        parts[1],
+    );
+    let mut instructions = tr!(
+        "Sign in to Twitch, copy the resulting URL containing #access_token= and paste it below. Input is hidden. Your Twitch login is detected automatically; an existing session for that account will be replaced.",
+        "Войдите в Twitch, скопируйте полученный адрес с #access_token= и вставьте ниже. Ввод скрыт. Логин определяется автоматически; существующая сессия этого аккаунта будет заменена."
+    ).to_owned();
+    if let Some(name) = expected {
+        instructions.push_str(&tf!(
+            "\nExpected account: {name}",
+            "\nОжидаемый аккаунт: {name}"
+        ));
+    }
+    frame.render_widget(
+        Paragraph::new(instructions).wrap(Wrap { trim: false }),
+        parts[2],
+    );
+    frame.render_widget(
+        Paragraph::new(tr!(
+            "Token or redirect URL (hidden):",
+            "Токен или адрес (скрытый ввод):"
+        )),
+        parts[3],
+    );
+    let masked = crate::control::Editor {
+        text: "*".repeat(editor.text.chars().count()),
+        cursor: editor.cursor,
+    };
+    frame.render_widget(
+        Paragraph::new(input_line(&masked, parts[4].width as usize))
+            .style(Style::default().fg(ACCENT)),
+        parts[4],
+    );
+}
+
 pub fn render_shell(
     frame: &mut Frame,
     dashboard: &Dashboard,
@@ -607,12 +714,16 @@ pub fn render_shell(
             }
         }
         Overlay::Accounts { .. } | Overlay::Pick { .. } => 20,
-        Overlay::Login { .. } => 14,
+        Overlay::Edit {
+            target: EditTarget::Token(_),
+            ..
+        } => 20,
         _ => 12,
     };
     let rect = popup(area, 100, height);
     frame.render_widget(Clear, rect);
     let title = match overlay {
+        Overlay::Updating { .. } => tr!("Program update", "Обновление программы"),
         Overlay::Campaigns { .. } | Overlay::CampaignsLoading => {
             tr!("Available Drops campaigns", "Доступные кампании Drops")
         }
@@ -622,6 +733,7 @@ pub fn render_shell(
         Overlay::Pick { .. } => tr!("Select an account", "Выберите аккаунт"),
         Overlay::Confirm { .. } => tr!("Remove account", "Удаление аккаунта"),
         Overlay::Edit { target, .. } => match target {
+            EditTarget::Token(_) => tr!("Sign in to Twitch", "Вход в Twitch"),
             EditTarget::Common => tr!("Shared channels", "Общие каналы"),
             EditTarget::Own(_) => tr!("Personal channels", "Личные каналы"),
             EditTarget::Temporary => tr!(
@@ -638,8 +750,8 @@ pub fn render_shell(
             "Настройки фарма + технические"
         ),
         Overlay::Settings { .. } => tr!("Farming settings", "Настройки фарма"),
-        Overlay::Login { .. } => tr!("Twitch sign-in", "Вход в Twitch"),
         Overlay::Loading => tr!("Loading accounts", "Загрузка аккаунтов"),
+        Overlay::TokenChecking => tr!("Checking the token", "Проверка токена"),
         Overlay::Help(_) => tr!("Help", "Помощь"),
     };
     let block = Block::default()
@@ -652,6 +764,10 @@ pub fn render_shell(
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(3)]).split(inner);
     let highlight = Style::default().bg(SELECTED).fg(ACCENT);
     let help = match overlay {
+        Overlay::Updating { .. } => tr!(
+            "Esc: hide. Farming continues during the download.",
+            "Esc: скрыть. Фарм продолжается во время скачивания."
+        ),
         Overlay::Campaigns { expanded: true, .. } => tr!(
             "↑↓/PgUp/PgDn: scroll • Enter: list • Esc: close",
             "↑↓/PgUp/PgDn: прокрутка • Enter: список • Esc: закрыть"
@@ -686,13 +802,20 @@ pub fn render_shell(
                 "Tab/↑↓: поле • ←→/Пробел: изменить\nF2: технические • Ctrl+U: очистить текст • Enter: сохранить • Esc: отмена"
             )
         }
+        Overlay::Edit {
+            target: EditTarget::Token(_),
+            ..
+        } => tr!(
+            "F2: copy URL • PgUp/PgDn: scroll URL • Enter: save • Esc: cancel",
+            "F2: копировать • PgUp/PgDn: адрес • Enter: сохранить • Esc: отмена"
+        ),
         Overlay::Edit { .. } => {
             tr!(
                 "←/→: cursor • Ctrl+U: clear • Enter: save • Esc: cancel",
                 "←/→: курсор • Ctrl+U: очистить • Enter: сохранить • Esc: отмена"
             )
         }
-        Overlay::Login { .. } | Overlay::Loading | Overlay::CampaignsLoading => {
+        Overlay::Loading | Overlay::TokenChecking | Overlay::CampaignsLoading => {
             tr!(
                 "Esc to cancel. Other accounts continue running.",
                 "Esc для отмены. Остальные аккаунты продолжают работать."
@@ -719,6 +842,13 @@ pub fn render_shell(
         chunks[1],
     );
     match overlay {
+        Overlay::Updating { checking } => {
+            frame.render_widget(Paragraph::new(if *checking {
+                tr!("Checking the latest stable GitHub release…", "Проверяю последний стабильный релиз GitHub…")
+            } else {
+                tr!("Checking, downloading and verifying the update. TwFarmer will restart after installation.", "Проверяю, скачиваю и проверяю обновление. После установки TwFarmer перезапустится.")
+            }).wrap(Wrap {trim: false}), chunks[0]);
+        }
         Overlay::CampaignsLoading => {
             frame.render_widget(
                 Paragraph::new(tr!(
@@ -891,7 +1021,18 @@ pub fn render_shell(
             );
         }
         Overlay::Edit { target, editor } => {
+            if let EditTarget::Token(expected) = target {
+                render_token_form(
+                    frame,
+                    chunks[0],
+                    editor,
+                    expected.as_deref(),
+                    shell.controls,
+                );
+                return;
+            }
             let description=match target {
+                EditTarget::Token(_) => unreachable!(),
                 EditTarget::Config=>tf!("Settings file path. A new file will be created.\nCurrent: {}", "Путь к файлу настроек. Новый файл будет создан.\nСейчас: {}",shell.path.display()),
                 EditTarget::Own(name)=>tf!("Account: {name}. Logins or URLs separated by spaces/commas.\nEmpty input uses the shared list.", "Аккаунт: {name}. Логины или ссылки через пробел/запятую.\nПустой ввод возвращает общий список."),
                 EditTarget::Temporary=>tr!("Logins or URLs separated by spaces/commas for all selected accounts.\nEmpty input restores the saved lists. This list is not saved to disk.", "Логины или ссылки через пробел/запятую для всех выбранных аккаунтов.\nПустой ввод возвращает сохранённые списки. На диск не записывается.").into(),
@@ -900,7 +1041,9 @@ pub fn render_shell(
             let editor_areas =
                 Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).split(chunks[0]);
             frame.render_widget(
-                Paragraph::new(description).wrap(Wrap { trim: false }),
+                Paragraph::new(description)
+                    .wrap(Wrap { trim: false })
+                    .scroll((shell.controls.instructions_scroll, 0)),
                 editor_areas[0],
             );
             frame.render_widget(
@@ -941,26 +1084,21 @@ pub fn render_shell(
                 &mut ListState::default().with_selected(Some(selected)),
             );
         }
-        Overlay::Login { uri, code } => {
-            let text = if code.is_empty() {
-                tr!(
-                    "Requesting a login code from Twitch…",
-                    "Запрашиваю код входа у Twitch…"
-                )
-                .into()
-            } else {
-                tf!(
-                    "Open in your browser:\n{uri}\n\nCode: {code}\n\nSelect the intended Twitch account and confirm sign-in.\nIts name appears automatically after confirmation.",
-                    "Откройте в браузере:\n{uri}\n\nКод: {code}\n\nВыберите нужный Twitch-аккаунт и подтвердите вход.\nИмя появится автоматически после подтверждения."
-                )
-            };
-            frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), chunks[0]);
-        }
         Overlay::Loading => {
             frame.render_widget(
                 Paragraph::new(tr!(
                     "Reading settings and saved accounts…",
                     "Читаю настройки и сохранённые аккаунты…"
+                ))
+                .wrap(Wrap { trim: false }),
+                chunks[0],
+            );
+        }
+        Overlay::TokenChecking => {
+            frame.render_widget(
+                Paragraph::new(tr!(
+                    "Validating the Twitch account and access to campaign links…",
+                    "Проверяю аккаунт Twitch и доступ к привязкам кампаний…"
                 ))
                 .wrap(Wrap { trim: false }),
                 chunks[0],
@@ -1017,8 +1155,49 @@ Drops: Tab показывает все награды. Enter раскрывае�
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::model::{ChannelView, Event};
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn token_form_shows_the_complete_url_and_f2_requests_copy_without_changing_input() {
+        for width in [40, 100] {
+            let mut controls = Controls::default();
+            controls.edit(EditTarget::Token(None), "Secret123".into());
+            let action = controls.key(
+                crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::F(2),
+                    crossterm::event::KeyModifiers::NONE,
+                ),
+                &[],
+                &Config::default(),
+                &HashSet::new(),
+            );
+            assert!(matches!(
+                action,
+                Some(crate::control::Action::CopyLoginLink)
+            ));
+            assert!(
+                matches!(&controls.overlay, Some(Overlay::Edit {editor, ..}) if editor.text == "Secret123")
+            );
+            let editor = crate::control::Editor::new("Secret123".into());
+            let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
+            terminal
+                .draw(|frame| render_token_form(frame, frame.area(), &editor, None, &controls))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..20)
+                .flat_map(|y| (0..width).map(move |x| buffer[(x, y)].symbol()))
+                .collect::<String>();
+            assert!(
+                text.replace([' ', '│'], "")
+                    .contains(crate::auth::NATIVE_LOGIN_URL)
+            );
+            assert!(!text.contains("Secret123"));
+            assert_eq!(buffer[(1, 2)].fg, ACCENT);
+            assert!(buffer[(1, 2)].modifier.contains(Modifier::BOLD));
+        }
+    }
     use std::time::Duration;
 
     #[test]
@@ -1044,7 +1223,7 @@ mod tests {
                             temporary: &[],
                             path,
                         },
-                    )
+                    );
                 })
                 .unwrap();
             let buffer = terminal.backend().buffer();
@@ -1291,9 +1470,16 @@ mod tests {
                     target: EditTarget::Common,
                     editor: crate::control::Editor::new("channel".into()),
                 },
+                Overlay::Edit {
+                    target: EditTarget::Token(None),
+                    editor: crate::control::Editor::new("PrivateSecret123".into()),
+                },
                 Overlay::Settings {
-                    index: 11,
-                    editors: vec![crate::control::Editor::new("value".into()); 12],
+                    index: SettingField::Priority as usize,
+                    editors: vec![
+                        crate::control::Editor::new("value".into());
+                        SettingField::ALL.len()
+                    ],
                     advanced: true,
                 },
                 Overlay::Campaigns {
@@ -1305,11 +1491,9 @@ mod tests {
                     scroll: 0,
                 },
                 Overlay::CampaignsLoading,
-                Overlay::Login {
-                    uri: "https://www.twitch.tv/activate".into(),
-                    code: "TESTCODE".into(),
-                },
                 Overlay::Loading,
+                Overlay::Updating { checking: false },
+                Overlay::TokenChecking,
                 Overlay::Help(0),
             ] {
                 let editor = matches!(overlay, Overlay::Edit { .. });
@@ -1329,7 +1513,7 @@ mod tests {
                                 path: Path::new("twfarmer.toml"),
                                 temporary: &[],
                             },
-                        )
+                        );
                     })
                     .unwrap();
                 let buffer = terminal.backend().buffer();
@@ -1345,6 +1529,7 @@ mod tests {
                     assert!(text.contains("▏"), "Input cursor is hidden");
                 }
                 assert!(!text.contains("default"));
+                assert!(!text.contains("PrivateSecret123"));
             }
         }
     }

@@ -24,6 +24,8 @@ pub enum MenuItem {
     Language,
     Config,
     Reload,
+    UpdateCheck,
+    UpdateInstall,
     Log,
     PlainLog,
     Help,
@@ -31,7 +33,7 @@ pub enum MenuItem {
 }
 
 impl MenuItem {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 22] = [
         Self::Start,
         Self::Stop,
         Self::Status,
@@ -48,6 +50,8 @@ impl MenuItem {
         Self::Language,
         Self::Config,
         Self::Reload,
+        Self::UpdateCheck,
+        Self::UpdateInstall,
         Self::Log,
         Self::PlainLog,
         Self::Help,
@@ -60,7 +64,12 @@ impl MenuItem {
                 tr!("Accounts", "Аккаунты")
             }
             Self::Common | Self::Own | Self::Inherit | Self::Temporary => tr!("Channels", "Каналы"),
-            Self::Settings | Self::Language | Self::Config | Self::Reload => {
+            Self::Settings
+            | Self::Language
+            | Self::Config
+            | Self::Reload
+            | Self::UpdateCheck
+            | Self::UpdateInstall => {
                 tr!("Settings", "Настройки")
             }
             _ => tr!("View", "Вид"),
@@ -93,6 +102,11 @@ impl MenuItem {
                 "Открыть / создать конфигурацию"
             ),
             Self::Reload => tr!("Reload settings from disk", "Перечитать настройки с диска"),
+            Self::UpdateCheck => tr!("Check for updates", "Проверить обновления"),
+            Self::UpdateInstall => tr!(
+                "Install the latest update",
+                "Установить последнее обновление"
+            ),
             Self::Log => tr!("Show / hide the log", "Показать / скрыть журнал"),
             Self::PlainLog => tr!("Switch to plain log", "Переключиться на обычный журнал"),
             Self::Help => tr!("Help", "Помощь"),
@@ -111,31 +125,29 @@ pub enum SettingField {
     Poll,
     Watch,
     Bonus,
-    Client,
-    Scopes,
     Language,
     Chat,
     FarmDrops,
     ClaimDrops,
     AutoDrops,
     Priority,
+    AutoUpdate,
 }
 impl SettingField {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 11] = [
         Self::Channels,
         Self::Poll,
         Self::Watch,
         Self::Bonus,
-        Self::Client,
-        Self::Scopes,
         Self::Language,
         Self::Chat,
         Self::FarmDrops,
         Self::ClaimDrops,
         Self::AutoDrops,
         Self::Priority,
+        Self::AutoUpdate,
     ];
-    const DISPLAY_ORDER: [Self; 12] = [
+    const DISPLAY_ORDER: [Self; 11] = [
         Self::Priority,
         Self::Channels,
         Self::FarmDrops,
@@ -144,13 +156,12 @@ impl SettingField {
         Self::Bonus,
         Self::Chat,
         Self::Language,
+        Self::AutoUpdate,
         Self::Poll,
         Self::Watch,
-        Self::Client,
-        Self::Scopes,
     ];
     pub fn visible(advanced: bool) -> &'static [Self] {
-        &Self::DISPLAY_ORDER[..if advanced { Self::ALL.len() } else { 8 }]
+        &Self::DISPLAY_ORDER[..if advanced { Self::ALL.len() } else { 9 }]
     }
     pub fn label(self) -> &'static str {
         match self {
@@ -167,11 +178,6 @@ impl SettingField {
                 "Просмотр, секунд (15-60)"
             ),
             Self::Bonus => tr!("Claim bonuses", "Забирать бонусы"),
-            Self::Client => "Twitch Client ID",
-            Self::Scopes => tr!(
-                "OAuth scopes separated by spaces",
-                "OAuth scopes через пробел"
-            ),
             Self::Language => tr!("Language", "Язык"),
             Self::Chat => tr!("Join chat", "Присутствие в чате"),
             Self::FarmDrops => tr!("Farm Drops", "Фармить Drops"),
@@ -181,6 +187,7 @@ impl SettingField {
                 "Автопоиск каналов Drops"
             ),
             Self::Priority => tr!("Farming priority", "Приоритет фарма"),
+            Self::AutoUpdate => tr!("Automatic program updates", "Автообновление программы"),
         }
     }
     pub fn choices(self) -> &'static [&'static str] {
@@ -188,9 +195,12 @@ impl SettingField {
             Self::Channels => &["1", "2"],
             Self::Language => &["en", "ru"],
             Self::Priority => &["points", "drops"],
-            Self::Bonus | Self::Chat | Self::FarmDrops | Self::ClaimDrops | Self::AutoDrops => {
-                &["false", "true"]
-            }
+            Self::Bonus
+            | Self::Chat
+            | Self::FarmDrops
+            | Self::ClaimDrops
+            | Self::AutoDrops
+            | Self::AutoUpdate => &["false", "true"],
             _ => &[],
         }
     }
@@ -211,14 +221,13 @@ impl SettingField {
             Self::Poll => config.poll_interval_seconds.to_string(),
             Self::Watch => config.watch_interval_seconds.to_string(),
             Self::Bonus => config.claim_bonus.to_string(),
-            Self::Client => config.client_id.clone(),
-            Self::Scopes => config.oauth_scopes.join(" "),
             Self::Language => config.language.code().into(),
             Self::Chat => config.chat_presence.to_string(),
             Self::FarmDrops => config.farm_drops.to_string(),
             Self::ClaimDrops => config.claim_drops.to_string(),
             Self::AutoDrops => config.auto_drops.to_string(),
             Self::Priority => config.farming_priority.code().into(),
+            Self::AutoUpdate => config.auto_update.to_string(),
         }
     }
 }
@@ -238,6 +247,7 @@ pub enum EditTarget {
     Own(String),
     Temporary,
     Config,
+    Token(Option<String>),
 }
 
 #[derive(Clone)]
@@ -301,7 +311,85 @@ pub enum Pick {
     Inherit,
 }
 
+pub fn read_secret() -> anyhow::Result<String> {
+    use anyhow::ensure;
+    use crossterm::{
+        event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind},
+        execute, terminal,
+    };
+    use std::io::{self, IsTerminal, Write};
+    ensure!(
+        io::stdin().is_terminal(),
+        "{}",
+        tf!(
+            "Hidden input requires a terminal. Use login --stdin for redirected input.",
+            "Для скрытого ввода нужен терминал. Для перенаправления используйте login --stdin."
+        )
+    );
+    eprint!(
+        "{}",
+        tf!(
+            "Token or redirect URL (hidden): ",
+            "Токен или адрес перенаправления (скрытый ввод): "
+        )
+    );
+    io::stderr().flush()?;
+    terminal::enable_raw_mode()?;
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _ = terminal::disable_raw_mode();
+            let _ = execute!(io::stderr(), DisableBracketedPaste);
+            eprintln!();
+        }
+    }
+    let _restore = Restore;
+    execute!(io::stderr(), EnableBracketedPaste)?;
+    let mut editor = Editor::new(String::new());
+    loop {
+        match event::read()? {
+            Event::Paste(text) => editor.insert(&text),
+            Event::Key(key) if key.kind != KeyEventKind::Release => {
+                ensure!(
+                    key.code != KeyCode::Esc
+                        && !(key.code == KeyCode::Char('c')
+                            && key.modifiers.contains(KeyModifiers::CONTROL)),
+                    "{}",
+                    tf!("Sign-in cancelled", "Вход отменён")
+                );
+                if key.code == KeyCode::Enter {
+                    return Ok(editor.text);
+                }
+                if key.code == KeyCode::F(2) {
+                    let message = crate::clipboard::copy_login_link()
+                        .map(|outcome| outcome.message().to_owned())
+                        .unwrap_or_else(|error| error.to_string());
+                    eprint!(
+                        "\r\n{message}\r\n{}",
+                        tr!(
+                            "Token or redirect URL (hidden): ",
+                            "Токен или адрес (скрытый ввод): "
+                        )
+                    );
+                    io::stderr().flush()?;
+                    continue;
+                }
+                editor.key(key);
+            }
+            _ => {}
+        }
+        ensure!(
+            editor.text.len() <= 8192,
+            "{}",
+            tf!("Token input is too long", "Ввод токена слишком длинный")
+        );
+    }
+}
+
 pub enum Overlay {
+    Updating {
+        checking: bool,
+    },
     Campaigns {
         index: usize,
         entries: Vec<(String, CatalogEntry)>,
@@ -334,15 +422,14 @@ pub enum Overlay {
         editors: Vec<Editor>,
         advanced: bool,
     },
-    Login {
-        uri: String,
-        code: String,
-    },
     Loading,
+    TokenChecking,
     Help(u16),
 }
 
 pub enum Action {
+    Update(bool),
+    CopyLoginLink,
     Campaigns,
     SetLanguage(crate::i18n::Language),
     Start,
@@ -368,6 +455,7 @@ pub struct Controls {
     pub notice: String,
     pub log_only: bool,
     pub plain_log: bool,
+    pub instructions_scroll: u16,
 }
 
 impl Controls {
@@ -375,6 +463,7 @@ impl Controls {
         self.overlay = Some(Overlay::Menu(0));
     }
     pub fn edit(&mut self, target: EditTarget, text: String) {
+        self.instructions_scroll = 0;
         self.overlay = Some(Overlay::Edit {
             target,
             editor: Editor::new(text),
@@ -419,8 +508,8 @@ impl Controls {
         if key.code == KeyCode::Esc {
             let cancel = matches!(
                 self.overlay,
-                Some(Overlay::Login { .. })
-                    | Some(Overlay::Loading)
+                Some(Overlay::Loading)
+                    | Some(Overlay::TokenChecking)
                     | Some(Overlay::CampaignsLoading)
             );
             self.overlay = None;
@@ -477,6 +566,8 @@ impl Controls {
                         MenuItem::Quit => return Some(Action::Quit),
                         MenuItem::PlainLog => return Some(Action::PlainLog),
                         MenuItem::Reload => return Some(Action::Reload),
+                        MenuItem::UpdateCheck => return Some(Action::Update(true)),
+                        MenuItem::UpdateInstall => return Some(Action::Update(false)),
                         MenuItem::Campaigns => return Some(Action::Campaigns),
                         MenuItem::Language => {
                             self.overlay = Some(Overlay::Language(usize::from(
@@ -533,6 +624,22 @@ impl Controls {
                 _ => {}
             },
             Some(Overlay::Edit { target, editor }) => {
+                if matches!(target, EditTarget::Token(_)) {
+                    match key.code {
+                        KeyCode::F(2) => {
+                            return Some(Action::CopyLoginLink);
+                        }
+                        KeyCode::PageDown => {
+                            self.instructions_scroll = self.instructions_scroll.saturating_add(3);
+                            return None;
+                        }
+                        KeyCode::PageUp => {
+                            self.instructions_scroll = self.instructions_scroll.saturating_sub(3);
+                            return None;
+                        }
+                        _ => {}
+                    }
+                }
                 if key.code == KeyCode::Enter {
                     return Some(Action::SaveEdit(target.clone(), editor.text.clone()));
                 }
@@ -644,9 +751,10 @@ impl Controls {
                 KeyCode::Enter => self.overlay = None,
                 _ => {}
             },
-            Some(Overlay::Login { .. })
-            | Some(Overlay::Loading)
+            Some(Overlay::Loading)
+            | Some(Overlay::TokenChecking)
             | Some(Overlay::CampaignsLoading) => {}
+            Some(Overlay::Updating { .. }) => {}
             None => match key.code {
                 KeyCode::Char('m') | KeyCode::F(1) => self.menu(),
                 KeyCode::Char('s') => return Some(Action::Start),
@@ -668,11 +776,19 @@ impl Controls {
 pub fn settings(config: &Config, values: &[String]) -> anyhow::Result<Config> {
     use anyhow::{Context, ensure};
     ensure!(
-        matches!(values.len(), 6..=12),
+        matches!(values.len(), 4..=11),
         "{}",
         tf!("Missing settings fields", "Не хватает полей настроек")
     );
     crate::config::SettingsPatch {
+        auto_update: values
+            .get(SettingField::AutoUpdate as usize)
+            .map(|value| value.trim().parse())
+            .transpose()
+            .context(tr!(
+                "Use true or false for automatic updates",
+                "Для автообновлений укажите true или false"
+            ))?,
         farming_priority: values
             .get(SettingField::Priority as usize)
             .map(|v| match v.trim() {
@@ -757,8 +873,6 @@ pub fn settings(config: &Config, values: &[String]) -> anyhow::Result<Config> {
                     "Для бонусов укажите true или false"
                 ))?,
         ),
-        client_id: Some(values[SettingField::Client as usize].clone()),
-        oauth_scopes: Some(values[SettingField::Scopes as usize].clone()),
     }
     .apply(config)
 }
@@ -778,6 +892,32 @@ pub fn config_path(text: &str) -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_menu_actions_and_automatic_update_setting_are_reachable() {
+        let config = Config::default();
+        for (item, checking) in [
+            (MenuItem::UpdateCheck, true),
+            (MenuItem::UpdateInstall, false),
+        ] {
+            let mut controls = Controls {
+                overlay: Some(Overlay::Menu(item.index())),
+                ..Controls::default()
+            };
+            assert!(
+                matches!(press(&mut controls, KeyCode::Enter, &config), Some(Action::Update(value)) if value == checking)
+            );
+        }
+        let mut controls = Controls::default();
+        controls.settings(&config);
+        focus(&mut controls, SettingField::AutoUpdate, &config);
+        press(&mut controls, KeyCode::Left, &config);
+        let Some(Action::SaveSettings(values)) = press(&mut controls, KeyCode::Enter, &config)
+        else {
+            panic!("Settings not saved");
+        };
+        assert!(!settings(&config, &values).unwrap().auto_update);
+    }
     fn press(controls: &mut Controls, code: KeyCode, config: &Config) -> Option<Action> {
         controls.key(
             KeyEvent::new(code, KeyModifiers::NONE),
@@ -845,7 +985,7 @@ mod tests {
             settings(&config, &values).unwrap().farming_priority,
             crate::config::FarmingPriority::Drops
         );
-        values[11] = "invalid".into();
+        values[SettingField::Priority as usize] = "invalid".into();
         assert!(settings(&config, &values).is_err());
         assert_eq!(
             config.farming_priority,
@@ -997,55 +1137,31 @@ mod tests {
         };
         let next = settings(&config, &values).unwrap();
         assert_eq!(next.poll_interval_seconds, 120);
-        assert_eq!(next.client_id, config.client_id);
-        assert_eq!(next.oauth_scopes, config.oauth_scopes);
     }
     #[test]
     fn drops_settings_are_editable_without_changing_old_form_values() {
         let config = Config::default();
-        let values = [
-            "2",
-            "60",
-            "20",
-            "true",
-            crate::config::CLIENT_ID,
-            "user_read",
-            "en",
-            "true",
-            "false",
-            "false",
-        ]
-        .map(str::to_string);
+        let values = ["2", "60", "20", "true", "en", "true", "false", "false"].map(str::to_string);
         let next = settings(&config, &values).unwrap();
         assert!(!next.farm_drops);
         assert!(!next.claim_drops);
-        assert!(settings(&config, &values[..8]).unwrap().farm_drops);
+        assert!(settings(&config, &values[..6]).unwrap().farm_drops);
         let mut automatic = values.to_vec();
         automatic.push("true".into());
-        automatic[8] = "true".into();
+        automatic[SettingField::FarmDrops as usize] = "true".into();
         assert!(settings(&config, &automatic).unwrap().automatic_drops());
         let mut invalid = values;
-        invalid[9] = "maybe".into();
+        invalid[SettingField::ClaimDrops as usize] = "maybe".into();
         assert!(settings(&config, &invalid).is_err());
     }
     #[test]
     fn chat_presence_is_editable_and_invalid_boolean_is_rejected() {
         let config = Config::default();
-        let values = [
-            "2",
-            "60",
-            "20",
-            "true",
-            crate::config::CLIENT_ID,
-            "user_read",
-            "en",
-            "false",
-        ]
-        .map(str::to_string);
+        let values = ["2", "60", "20", "true", "en", "false"].map(str::to_string);
         assert!(!settings(&config, &values).unwrap().chat_presence);
         assert!(config.chat_presence);
         let mut invalid = values;
-        invalid[7] = "maybe".into();
+        invalid[SettingField::Chat as usize] = "maybe".into();
         assert!(settings(&config, &invalid).is_err());
     }
     use crossterm::event::KeyModifiers;
@@ -1102,14 +1218,7 @@ mod tests {
     #[test]
     fn settings_reject_values_outside_twitch_limits() {
         let config = Config::default();
-        let values = vec![
-            "3".into(),
-            "60".into(),
-            "20".into(),
-            "true".into(),
-            config.client_id.clone(),
-            "user_read".into(),
-        ];
+        let values = vec!["3".into(), "60".into(), "20".into(), "true".into()];
         assert!(settings(&config, &values).is_err());
     }
 }

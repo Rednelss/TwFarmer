@@ -2,6 +2,24 @@
 
 **English** | [Русский](CHANGELOG.ru.md)
 
+## 0.3.0 (2026-11-22)
+
+- Automatic stable updates from GitHub at startup and every 24 hours, with
+  SHA-256 verification and platform-specific archives. Updated instances restart
+  with active accounts and channels; Linux keeps the systemd service PID.
+- `update` and `update --check`, matching menu actions, and an `auto_update`
+  setting enabled by default. Failed checks keep farming and retry after six hours.
+- Show the full sign-in URL in a highlighted field; `F2` copies it in the
+  interface and `login`, using the desktop or terminal clipboard.
+- Replace device-code authorization with native token sign-in in `login` and
+  the interface. Tokens and redirect URLs use hidden input; `login --stdin`
+  supports scripts. Account names and client IDs come from Twitch validation.
+- Read each account's campaign links by campaign ID, allowing linked rewards
+  to start before the first watch minute and keeping unlinked games excluded.
+  Sessions without access to these data request a new `login`.
+- Remove obsolete Client ID and OAuth scope controls; legacy configuration keys
+  are ignored. No browser dependency is added to the program.
+
 ## 0.2.1 (2026-11-22)
 
 - Repeated Drops use each account and reward's viewing window from Twitch.

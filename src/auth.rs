@@ -1,13 +1,11 @@
-use crate::config::Config;
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use std::{fs, io::Write, path::Path, time::Duration};
-use tokio::time::{Instant, sleep};
+use std::{fs, io::Write, path::Path};
 
-const DEVICE: &str = "https://id.twitch.tv/oauth2/device";
 const TOKEN: &str = "https://id.twitch.tv/oauth2/token";
 const VALIDATE: &str = "https://id.twitch.tv/oauth2/validate";
+pub const NATIVE_LOGIN_URL: &str = "https://www.twitch.tv/login?client_id=kd1unb4b3q4t58fwlpcbzcbnm76a8fp&redirect_params=client_id%3Dkd1unb4b3q4t58fwlpcbzcbnm76a8fp%26redirect_uri%3Dhttps%253A%252F%252Fwww.twitch.tv%252F%26response_type%3Dtoken";
 
 #[derive(Serialize, Deserialize)]
 pub struct Auth {
@@ -30,15 +28,6 @@ pub struct Identity {
 }
 
 #[derive(Deserialize)]
-struct Device {
-    device_code: String,
-    user_code: String,
-    verification_uri: String,
-    expires_in: u64,
-    interval: u64,
-}
-
-#[derive(Deserialize)]
 struct Tokens {
     access_token: String,
     refresh_token: Option<String>,
@@ -52,8 +41,8 @@ impl std::fmt::Display for SessionExpired {
             f,
             "{}",
             tf!(
-                "The Twitch session is invalid. Sign in to the account again.",
-                "Сессия Twitch недействительна. Обновите вход в аккаунт."
+                "The Twitch session is invalid. Run twfarmer login to sign in again.",
+                "Сессия Twitch недействительна. Выполните twfarmer login для повторного входа."
             )
         )
     }
@@ -111,9 +100,22 @@ pub async fn validate(client: &Client, auth: &Auth) -> Result<Identity> {
 }
 
 async fn validate_at(client: &Client, auth: &Auth, endpoint: &str) -> Result<Identity> {
+    let identity = validate_token_at(client, &auth.access_token, endpoint).await?;
+    ensure!(
+        identity.client_id == auth.client_id,
+        "{}",
+        tf!(
+            "The token client_id does not match the saved session",
+            "client_id токена не совпадает с сохранённой сессией"
+        )
+    );
+    Ok(identity)
+}
+
+async fn validate_token_at(client: &Client, token: &str, endpoint: &str) -> Result<Identity> {
     let response = client
         .get(endpoint)
-        .header("Authorization", format!("OAuth {}", auth.access_token))
+        .header("Authorization", format!("OAuth {token}"))
         .send()
         .await
         .map_err(|e| e.without_url())
@@ -133,15 +135,9 @@ async fn validate_at(client: &Client, auth: &Auth, endpoint: &str) -> Result<Ide
         "Неверный ответ проверки сессии"
     ))?;
     ensure!(
-        identity.client_id == auth.client_id,
-        "{}",
-        tf!(
-            "The token client_id does not match the saved session",
-            "client_id токена не совпадает с сохранённой сессией"
-        )
-    );
-    ensure!(
-        !identity.user_id.is_empty() && !identity.login.is_empty(),
+        !identity.user_id.is_empty()
+            && !identity.login.is_empty()
+            && !identity.client_id.is_empty(),
         "{}",
         tf!(
             "A Twitch user token is required",
@@ -149,6 +145,72 @@ async fn validate_at(client: &Client, auth: &Auth, endpoint: &str) -> Result<Ide
         )
     );
     Ok(identity)
+}
+
+fn token_input(input: &str) -> Result<String> {
+    let invalid = || {
+        anyhow::anyhow!(
+            "{}",
+            tf!(
+                "Enter a Twitch access token or the Twitch redirect URL containing it.",
+                "Введите access token Twitch или адрес перенаправления Twitch с токеном."
+            )
+        )
+    };
+    let input = input.trim();
+    let token = if input.starts_with("https://") {
+        let url = reqwest::Url::parse(input).map_err(|_| invalid())?;
+        ensure!(
+            url.host_str() == Some("www.twitch.tv")
+                && url.path() == "/"
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.port().is_none(),
+            "{}",
+            invalid()
+        );
+        let fragment = url.fragment().ok_or_else(invalid)?;
+        let mut tokens = reqwest::Url::parse(&format!("https://www.twitch.tv/?{fragment}"))
+            .map_err(|_| invalid())?
+            .query_pairs()
+            .filter(|(name, _)| name == "access_token")
+            .map(|(_, value)| value.into_owned())
+            .collect::<Vec<_>>();
+        ensure!(tokens.len() == 1, "{}", invalid());
+        tokens.remove(0)
+    } else {
+        input
+            .strip_prefix("oauth:")
+            .or_else(|| input.strip_prefix("OAuth "))
+            .unwrap_or(input)
+            .to_owned()
+    };
+    ensure!(
+        !token.is_empty()
+            && token.len() <= 4096
+            && token.chars().all(|c| c.is_ascii_alphanumeric()),
+        "{}",
+        invalid()
+    );
+    Ok(token)
+}
+
+pub async fn import(client: &Client, input: &str) -> Result<(Auth, Identity)> {
+    import_at(client, input, VALIDATE).await
+}
+
+async fn import_at(client: &Client, input: &str, endpoint: &str) -> Result<(Auth, Identity)> {
+    let access_token = token_input(input)?;
+    let identity = validate_token_at(client, &access_token, endpoint).await?;
+    let auth = Auth {
+        access_token,
+        refresh_token: None,
+        client_id: identity.client_id.clone(),
+        device_id: uuid::Uuid::new_v4().simple().to_string(),
+        login: Some(identity.login.clone()),
+        user_id: Some(identity.user_id.clone()),
+    };
+    Ok((auth, identity))
 }
 
 pub async fn ensure_valid(client: &Client, auth: &mut Auth, path: &Path) -> Result<Identity> {
@@ -163,7 +225,7 @@ async fn ensure_valid_at(
     token_endpoint: &str,
 ) -> Result<Identity> {
     match validate_at(client, auth, validate_endpoint).await {
-        // TV tokens with expires_in=0 can still pass validation.
+        // A zero lifetime can still pass Twitch validation.
         // Refresh after a 401 or a positive lifetime below the threshold.
         Ok(identity) if identity.expires_in == 0 || identity.expires_in > 300 => Ok(identity),
         Ok(identity) if auth.refresh_token.is_none() => Ok(identity),
@@ -213,190 +275,60 @@ async fn refresh_at(client: &Client, auth: &mut Auth, path: &Path, endpoint: &st
     save(path, auth)
 }
 
-pub async fn authorize(client: &Client, config: &Config) -> Result<(Auth, Identity)> {
-    authorize_with(client, config, |uri, code| {
-        println!(
-            "{}",
-            tf!("Open in your browser: {uri}", "Откройте в браузере: {uri}")
-        );
-        println!(
-            "{}",
-            tf!(
-                "Login code: {code}. Confirm sign-in on the Twitch website.",
-                "Код входа: {code}. Подтвердите вход на сайте Twitch."
-            )
-        );
-        println!(
-            "{}",
-            tf!(
-                "Waiting for confirmation; Ctrl+C to cancel.",
-                "Ожидаю подтверждение; Ctrl+C для отмены."
-            )
-        );
-    })
-    .await
-}
-
-pub async fn authorize_with(
-    client: &Client,
-    config: &Config,
-    mut show: impl FnMut(String, String) + Send,
-) -> Result<(Auth, Identity)> {
-    let device_id = uuid::Uuid::new_v4().simple().to_string();
-    let response = client
-        .post(DEVICE)
-        .header("Origin", "https://android.tv.twitch.tv")
-        .header("Referer", "https://android.tv.twitch.tv/")
-        .header("Client-ID", &config.client_id)
-        .header("X-Device-ID", &device_id)
-        .form(&[
-            ("client_id", config.client_id.as_str()),
-            ("scopes", &config.oauth_scopes.join(" ")),
-        ])
-        .send()
-        .await
-        .map_err(|e| e.without_url())
-        .context(tr!("Requesting a login code", "Запрос кода входа"))?;
-    crate::twitch::check_status(
-        response.status(),
-        tr!(
-            "Login code: check client_id and oauth_scopes",
-            "Код входа: проверьте client_id и oauth_scopes"
-        ),
-    )?;
-    let device: Device = response.json().await.context(tr!(
-        "Invalid login code response",
-        "Неверный ответ запроса кода"
-    ))?;
-    let uri = reqwest::Url::parse(&device.verification_uri)?;
-    ensure!(
-        uri.scheme() == "https" && matches!(uri.host_str(), Some("twitch.tv" | "www.twitch.tv")),
-        "{}",
-        tf!(
-            "Invalid Twitch authorization URL",
-            "Неверный адрес авторизации Twitch"
-        )
-    );
-    show(device.verification_uri.clone(), device.user_code.clone());
-    let deadline = Instant::now() + Duration::from_secs(device.expires_in);
-    let mut interval = device.interval.clamp(1, 60);
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        ensure!(
-            !remaining.is_zero(),
-            "{}",
-            tf!(
-                "The code expired. Run twfarmer login again.",
-                "Код истёк. Выполните twfarmer login ещё раз."
-            )
-        );
-        sleep(Duration::from_secs(interval).min(remaining)).await;
-        ensure!(
-            Instant::now() < deadline,
-            "{}",
-            tf!(
-                "The code expired. Run twfarmer login again.",
-                "Код истёк. Выполните twfarmer login ещё раз."
-            )
-        );
-        let response = client
-            .post(TOKEN)
-            .header("Origin", "https://android.tv.twitch.tv")
-            .header("Client-ID", &config.client_id)
-            .header("X-Device-ID", &device_id)
-            .form(&[
-                ("client_id", config.client_id.as_str()),
-                ("device_code", device.device_code.as_str()),
-                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-            ])
-            .send()
-            .await
-            .map_err(|e| e.without_url())
-            .context(tr!("Waiting for sign-in", "Ожидание входа"))?;
-        let status = response.status();
-        if status.is_success() {
-            let tokens: Tokens = response
-                .json()
-                .await
-                .context(tr!("Invalid sign-in response", "Неверный ответ входа"))?;
-            let mut auth = Auth {
-                access_token: tokens.access_token,
-                refresh_token: tokens.refresh_token,
-                client_id: config.client_id.clone(),
-                device_id,
-                login: None,
-                user_id: None,
-            };
-            let identity = validate(client, &auth).await?;
-            auth.login = Some(identity.login.clone());
-            auth.user_id = Some(identity.user_id.clone());
-            return Ok((auth, identity));
-        }
-        if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
-            interval = (interval + 5).min(60);
-            continue;
-        }
-        let body: serde_json::Value = response.json().await.context(tr!(
-            "Invalid sign-in polling response",
-            "Неверный ответ ожидания входа"
-        ))?;
-        match poll_action(&body) {
-            Poll::Pending => {}
-            Poll::Slower => interval = (interval + 5).min(60),
-            Poll::Denied => bail!(
-                "{}",
-                tf!(
-                    "Sign-in was declined on the Twitch website",
-                    "Вход отклонён на сайте Twitch"
-                )
-            ),
-            Poll::Expired => bail!(
-                "{}",
-                tf!(
-                    "The code expired. Run twfarmer login again.",
-                    "Код истёк. Выполните twfarmer login ещё раз."
-                )
-            ),
-            Poll::Unknown => {
-                bail!(
-                    "{}",
-                    tf!(
-                        "Twitch rejected sign-in (HTTP {status}); check client_id and oauth_scopes",
-                        "Twitch отклонил вход (HTTP {status}); проверьте client_id и oauth_scopes"
-                    )
-                )
-            }
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-enum Poll {
-    Pending,
-    Slower,
-    Denied,
-    Expired,
-    Unknown,
-}
-fn poll_action(body: &serde_json::Value) -> Poll {
-    let message = body
-        .get("error")
-        .and_then(|v| v.as_str())
-        .or_else(|| body.get("message").and_then(|v| v.as_str()))
-        .unwrap_or("");
-    match message {
-        "authorization_pending" | "authorization pending" => Poll::Pending,
-        "slow_down" | "slow down" => Poll::Slower,
-        "access_denied" | "access denied" => Poll::Denied,
-        "expired_token" | "invalid device code" => Poll::Expired,
-        _ => Poll::Unknown,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::time::Duration;
+
+    #[test]
+    fn token_input_accepts_redirects_and_does_not_expose_invalid_secrets() {
+        for input in [
+            "test123",
+            " oauth:test123\n",
+            "OAuth test123",
+            "https://www.twitch.tv/#access_token=test123&scope=user_read&token_type=bearer",
+        ] {
+            assert_eq!(token_input(input).unwrap(), "test123");
+        }
+        for input in [
+            "",
+            "secretwith spaces",
+            "https://other.test/#access_token=private123",
+            "https://www.twitch.tv/#access_token=private123&access_token=second",
+            "https://www.twitch.tv/#error=private123",
+            "https://www.twitch.tv/login#access_token=private123",
+        ] {
+            let error = token_input(input).unwrap_err().to_string();
+            assert!(!error.contains("private123") && !error.contains("secretwith"));
+        }
+    }
+
+    #[tokio::test]
+    async fn imported_tokens_use_the_validated_client_and_have_no_refresh_token() {
+        for expires in [0, 14400] {
+            let (endpoint, server) = mock_oauth(vec![(
+                "/validate",
+                200,
+                json!({
+                    "client_id": "native-client", "login": "viewer", "user_id": "123", "expires_in": expires
+                }),
+            )]);
+            let (auth, identity) = import_at(
+                &Client::new(),
+                "oauth:test123",
+                &format!("{endpoint}/validate"),
+            )
+            .await
+            .unwrap();
+            assert_eq!(identity.expires_in, expires);
+            assert_eq!(auth.client_id, "native-client");
+            assert_eq!(auth.login.as_deref(), Some("viewer"));
+            assert_eq!(auth.user_id.as_deref(), Some("123"));
+            assert!(auth.refresh_token.is_none());
+            assert_eq!(server.join().unwrap(), ["/validate"]);
+        }
+    }
     fn mock_oauth(
         responses: Vec<(&'static str, u16, serde_json::Value)>,
     ) -> (String, std::thread::JoinHandle<Vec<String>>) {
@@ -543,23 +475,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn handles_twitch_and_oauth_poll_responses() {
-        assert_eq!(
-            poll_action(&json!({"message":"authorization_pending"})),
-            Poll::Pending
-        );
-        assert_eq!(poll_action(&json!({"error":"slow_down"})), Poll::Slower);
-        assert_eq!(poll_action(&json!({"error":"access_denied"})), Poll::Denied);
-        assert_eq!(
-            poll_action(&json!({"message":"invalid device code"})),
-            Poll::Expired
-        );
-        assert_eq!(
-            poll_action(&json!({"message":"invalid client"})),
-            Poll::Unknown
-        );
-    }
     #[test]
     fn session_is_saved_and_private() {
         let dir = tempfile::tempdir().unwrap();

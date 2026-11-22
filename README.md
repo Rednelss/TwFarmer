@@ -31,13 +31,39 @@ cd target/release
 
 The management menu opens. Complete the first setup in the interface: add an
 account, set shared channels, select accounts, and start farming.
-Sign-in shows a URL and a device code. Confirm it on the Twitch website using
-the intended account. Passwords and 2FA are entered on Twitch, and the login
-appears in the program automatically after confirmation.
+Sign-in shows a Twitch URL. Open it on your own computer or phone, sign in to
+the intended account, and copy the resulting address containing `#access_token=`.
+Paste that address or its access token into TwFarmer's hidden input.
+Passwords and 2FA are entered only on Twitch. The program determines the account
+login and validates access to campaign links before saving the session.
+TwFarmer does not launch or require a browser, including on a VDS.
+
+The full sign-in URL is highlighted in a separate field. `F2` copies it in the
+interface and during `login`. On local desktops, copying uses `wl-copy`,
+`xclip`/`xsel`, `pbcopy`, or Windows `clip.exe` when available. Over SSH or when
+no desktop clipboard is available, TwFarmer requests the terminal's clipboard.
+If the terminal declines, copy the displayed URL manually. `PgUp`/`PgDn` scroll
+the URL field in a small terminal. TwFarmer does not open a browser itself.
 
 Keep using the same working directory or `--config` path for existing settings.
 Legacy session files are read automatically; personal channel lists using old
 profile aliases are migrated to Twitch logins.
+
+`./twfarmer login` uses the same sign-in as the interface. No account name is
+required: an existing session for the detected account is replaced, preserving
+its channel lists. `login --account LOGIN` optionally verifies the expected account.
+For scripts, `login --stdin` reads a token or redirect URL from standard input.
+Keep tokens out of command arguments, shell history, and public logs.
+
+The [Twitch sign-in URL](https://www.twitch.tv/login?client_id=kd1unb4b3q4t58fwlpcbzcbnm76a8fp&redirect_params=client_id%3Dkd1unb4b3q4t58fwlpcbzcbnm76a8fp%26redirect_uri%3Dhttps%253A%252F%252Fwww.twitch.tv%252F%26response_type%3Dtoken)
+uses the native client tested with the campaign-link API. A regular website
+session token may not provide the same access. Device-code authorization has
+been removed. Old sessions that cannot read campaign links ask you to run `login`
+again; they are not treated as proof that game accounts are unlinked.
+
+This sign-in does not issue a refresh token. The tested native token validates
+with `expires_in: 0`, but Twitch may still revoke it. If it becomes invalid,
+sign in again. Existing sessions with a refresh token retain automatic refresh.
 
 ## Language
 
@@ -62,6 +88,33 @@ The interface, help, sign-in messages, and new log entries use the chosen langua
 existing log entries keep their original text. Old configuration files without
 `language` default to English.
 
+## Program updates
+
+`auto_update = true` is the default. The interface, `run`, and `daemon` check
+published stable releases in `Rednelss/TwFarmer` at startup and every 24 hours.
+Downloads run alongside farming. A verified update replaces the executable,
+then restarts with active accounts, temporary channels, and service state.
+Linux uses the same PID for systemd. Unsaved input delays the restart until the
+form is saved or closed. Session counters start a new process session.
+
+```bash
+./twfarmer update --check
+./twfarmer update
+./twfarmer settings set --auto-update false
+```
+
+The menu has **Check for updates** and **Install the latest update**.
+**Farming settings > Automatic program updates** controls automatic installation.
+`update --check` makes no changes. The standalone `update` command installs the
+binary; restart running instances afterwards.
+
+The updater chooses the OS and architecture, verifies the archive against
+`SHA256SUMS`, and reads only its executable. Configuration and tokens are retained.
+The executable directory must be writable. GitHub builds support Linux x86_64
+with glibc 2.35+, Windows x86_64, and macOS Apple Silicon. Unsupported platforms
+use source builds. Failed checks leave farming active and retry after six hours.
+Install 0.3.0 manually when upgrading from a version without an updater.
+
 ## Terminal interface
 
 Press `m` or `F1` to open the menu, `↑/↓` to select, `Enter` to apply, and
@@ -82,8 +135,8 @@ An empty personal list uses the shared list. An empty temporary list restores
 saved lists. Forms support `←/→`, `Home/End`, `Backspace/Delete`, paste, and
 `Ctrl+U` to clear input. In settings, `Tab` or `↑/↓` moves between fields;
 `←/→` or Space changes switches and choices. `Enter` saves; `Esc` discards edits.
-F2 shows or hides advanced fields: polling interval, watch interval, Twitch
-Client ID, and OAuth scopes. Hiding those fields preserves their values.
+F2 shows or hides advanced fields: polling and watch intervals.
+Hiding those fields preserves their values.
 
 Shared and personal channels, settings, and the account selection are saved.
 Temporary channels apply to all selected accounts in the current process and
@@ -142,8 +195,7 @@ StreamElements and similar bots maintain their own loyalty balances. Whether
 chat presence earns those points depends on the broadcaster's bot settings;
 some rules require activity or a live stream. The dashboard balance is still
 Twitch channel points. Twitch's users-in-chat list may take time to update.
-If Twitch rejects IRC login, renew the account's sign-in. Tokens from some
-OAuth clients require `chat:read` in `oauth_scopes` for IRC access.
+If Twitch rejects IRC login, renew the account's sign-in.
 
 ## Commands
 
@@ -194,6 +246,8 @@ applications at https://www.twitch.tv/settings/connections.
 | Temporary account selection, t | `run --account LOGIN` or `start --account LOGIN` |
 | Add an account | `login` or `accounts add` |
 | Renew sign-in | `login --account LOGIN` |
+| Check / install program updates | `update --check` / `update` |
+| Automatic program updates | `settings set --auto-update true` or `false` |
 | Remove an account and its settings | `accounts remove LOGIN` or `logout --account LOGIN` |
 | List accounts | `accounts list` |
 | Shared channels | `channels CHANNELS` |
@@ -234,11 +288,10 @@ Commands that change channels, settings, or the saved account selection apply
 those changes to the running program. Temporary lists and selections are not
 written to disk. `settings set` accepts `--max-channels`,
 `--poll-interval-seconds`, `--watch-interval-seconds`, `--claim-bonus true|false`,
-`--client-id`, `--chat-presence true|false`, `--farm-drops true|false`,
-`--claim-drops true|false`, `--language en|ru`, and `--oauth-scopes "user_read"`.
+`--chat-presence true|false`, `--farm-drops true|false`,
+`--claim-drops true|false`, and `--language en|ru`.
 It also accepts `--auto-drops true|false` for automatic campaign and channel discovery.
 Use `--farming-priority points|drops` to choose which fills video slots first.
-An empty scopes string clears the list.
 
 The plain-log menu action releases the dashboard and disables keyboard control;
 farming continues. `journal` restores the interface in an interactive terminal.
@@ -316,8 +369,9 @@ See `twfarmer.example.toml`:
 - `chat_presence`: join the configured channels' chats; defaults to `true`.
 - `farm_drops`, `claim_drops`: watch-based Drops and automatic claims; default to `true`.
 - `auto_drops`: automatically discover eligible campaigns and channels; defaults to `false`.
-- `client_id`, `oauth_scopes`: sign-in settings, defaulting to the public TV
-  client ID and `user_read`. Changing the client ID requires signing in again.
+- `auto_update`: install stable GitHub releases automatically; defaults to `true`.
+Legacy `client_id` and `oauth_scopes` settings are ignored. Each saved session
+uses its client ID validated by Twitch.
 
 New sessions are stored in `twfarmer.toml.accounts/TWITCH_LOGIN.auth.json`.
 Legacy `twfarmer.toml.auth.json` files remain supported. On Unix, new session
@@ -326,10 +380,10 @@ Sessions contain tokens and are excluded from Git. Tokens are not printed in
 the log or sent to the video CDN. Renewing an account's sign-in rejects a
 different Twitch account and preserves the previous session.
 
-Sessions are checked at startup and every five minutes. TV tokens with
+Sessions are checked at startup and every five minutes. Tokens with
 `expires_in = 0` remain valid when Twitch validation succeeds.
 Network failures trigger retries with backoff up to five minutes.
-Press `Esc` to cancel device sign-in.
+Press `Esc` to cancel sign-in.
 
 The program downloads a low-quality video segment and sends `minute-watched`
 events every 20 seconds by default. Video is not played or saved to disk.

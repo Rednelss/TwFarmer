@@ -16,7 +16,9 @@ use std::{
     sync::LazyLock,
     time::Duration,
 };
-use tokio::time::Instant;
+use tokio::{sync::Mutex, time::Instant};
+
+type CampaignLinks = Option<HashMap<String, bool>>;
 
 const GQL: &str = "https://gql.twitch.tv/gql";
 const POINTS_HASH: &str = "7fe050e3761eb2cf258d70ee1a21cbd76fa8cf3d7e7b12fc437e7029d446b5e3";
@@ -55,6 +57,7 @@ pub struct Twitch {
     auth_path: PathBuf,
     session_id: String,
     tracking: Option<(Url, Instant)>,
+    campaign_links: Mutex<Option<(Instant, CampaignLinks)>>,
 }
 
 #[derive(Clone)]
@@ -84,44 +87,47 @@ pub struct Playback {
 }
 
 impl Twitch {
-    pub async fn connect(config: &crate::config::Config, auth_path: PathBuf) -> Result<Self> {
+    pub async fn connect(auth_path: PathBuf) -> Result<Self> {
         let client = http_client()?;
         let mut auth = auth::read(&auth_path)?;
-        ensure!(
-            auth.client_id == config.client_id,
-            "{}",
-            tf!(
-                "client_id changed. Run twfarmer login.",
-                "client_id изменился. Выполните twfarmer login."
-            )
-        );
         let identity = auth::ensure_valid(&client, &mut auth, &auth_path).await?;
         auth::sync_identity(&mut auth, &identity, &auth_path)?;
-        Ok(Self {
+        let twitch = Self {
             client,
             auth,
             identity,
             auth_path,
             session_id: uuid::Uuid::new_v4().simple().to_string(),
             tracking: None,
-        })
+            campaign_links: Mutex::new(None),
+        };
+        twitch.required_campaign_links().await?;
+        Ok(twitch)
     }
 
     pub async fn validate(&mut self) -> Result<()> {
+        let old_token = self.auth.access_token.clone();
         self.identity = auth::ensure_valid(&self.client, &mut self.auth, &self.auth_path).await?;
+        if old_token != self.auth.access_token {
+            *self.campaign_links.get_mut() = None;
+        }
         auth::sync_identity(&mut self.auth, &self.identity, &self.auth_path)?;
         Ok(())
     }
 
     async fn gql(&self, body: Value) -> Result<Value> {
-        let response = self
+        let mut request = self
             .client
             .post(GQL)
             .header("Authorization", format!("OAuth {}", self.auth.access_token))
             .header("Client-ID", &self.auth.client_id)
             .header("X-Device-ID", &self.auth.device_id)
             .header("Client-Session-ID", &self.session_id)
-            .json(&body)
+            .json(&body);
+        if self.auth.client_id == "kd1unb4b3q4t58fwlpcbzcbnm76a8fp" {
+            request = request.header("User-Agent", "Dalvik/2.1.0 (Linux; U; Android 16; SM-S911B Build/TP1A.220624.014) tv.twitch.android.app/31.8.0/3108006");
+        }
+        let response = request
             .send()
             .await
             .map_err(|e| e.without_url())
@@ -135,6 +141,44 @@ impl Twitch {
             "Неверный JSON Twitch GraphQL"
         ))?;
         gql_data(body)
+    }
+
+    async fn campaign_links(&self) -> Result<CampaignLinks> {
+        let mut cache = self.campaign_links.lock().await;
+        if let Some((updated, links)) = &*cache
+            && updated.elapsed() < Duration::from_secs(300)
+        {
+            return Ok(links.clone());
+        }
+        let data = self
+            .gql(json!({"query": crate::drops::LINKS_QUERY}))
+            .await?;
+        let links = crate::drops::campaign_links(&data, &self.identity.user_id)?;
+        *cache = Some((Instant::now(), links.clone()));
+        Ok(links)
+    }
+
+    async fn required_campaign_links(&self) -> Result<HashMap<String, bool>> {
+        self.campaign_links().await?.context(tr!(
+            "This session cannot read Drops campaign links. Run twfarmer login or renew the account in the menu.",
+            "Эта сессия не читает привязки кампаний Drops. Выполните twfarmer login или обновите вход в аккаунт через меню."
+        ))
+    }
+
+    pub async fn import_token(input: &str) -> Result<(Auth, Identity)> {
+        let client = http_client()?;
+        let (auth, identity) = auth::import(&client, input).await?;
+        let twitch = Self {
+            client,
+            auth,
+            identity,
+            auth_path: PathBuf::new(),
+            session_id: uuid::Uuid::new_v4().simple().to_string(),
+            tracking: None,
+            campaign_links: Mutex::new(None),
+        };
+        twitch.required_campaign_links().await?;
+        Ok((twitch.auth, twitch.identity))
     }
 
     async fn persisted(&self, name: &str, hash: &str, variables: Value) -> Result<Value> {
@@ -182,6 +226,7 @@ impl Twitch {
     }
 
     pub async fn drops(&self, channel: &Channel) -> Result<Vec<crate::drops::Drop>> {
+        let links = self.required_campaign_links().await?;
         let data = self
             .gql(json!({
                 "operationName": "DropChannelCampaignsProgress",
@@ -189,10 +234,11 @@ impl Twitch {
                 "variables": {"channelID": channel.id}
             }))
             .await?;
-        crate::drops::parse(&data, &channel.id, channel.game_id.as_deref())
+        crate::drops::parse(&data, &channel.id, channel.game_id.as_deref(), Some(&links))
     }
 
     pub async fn available_drops(&self) -> Result<Vec<crate::drops::CatalogEntry>> {
+        let links = self.required_campaign_links().await?;
         let data = self
             .gql(json!({"query": "query { dropsCampaigns(includeUpcoming: false) { id status } }"}))
             .await?;
@@ -219,6 +265,7 @@ impl Twitch {
         for result in results {
             campaigns.extend(result?);
         }
+        crate::drops::apply_links(&mut campaigns, Some(&links));
         Ok(crate::drops::catalog(campaigns))
     }
 

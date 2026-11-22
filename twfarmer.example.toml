@@ -1,5 +1,6 @@
 # Interface and log language: "en" or "ru". / Язык интерфейса и журнала.
 language = "en"
+auto_update = true
 
 # Shared channels in priority order. / Общие каналы в порядке приоритета.
 channels = ["welovegames", "betboom_cs_ru"]
@@ -19,8 +20,6 @@ claim_drops = true
 auto_drops = false
 # Fill points slots first, or reserve a Drops slot. / Приоритет баллов или Drops.
 farming_priority = "points"
-client_id = "ue6666qo983tsx6so1t0vnawi233wa"
-oauth_scopes = ["user_read"]
 
 # Personal lists replace shared channels. / Личные списки заменяют общие каналы.
 [account_channels]

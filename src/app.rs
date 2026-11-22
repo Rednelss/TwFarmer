@@ -1,6 +1,6 @@
 use crate::{
     accounts::{self, Profile},
-    auth::{self, Auth, Identity},
+    auth::{Auth, Identity},
     config::Config,
     control::{self, Action, Controls, EditTarget, Overlay},
     farmer::{self, ActiveUsers},
@@ -37,12 +37,6 @@ enum Job {
         expected: Option<Profile>,
     },
 }
-struct Prompt {
-    generation: u64,
-    uri: String,
-    code: String,
-}
-
 struct App {
     path: PathBuf,
     config: Config,
@@ -56,20 +50,20 @@ struct App {
     jobs: JoinSet<(u64, Job)>,
     events_tx: mpsc::UnboundedSender<Event>,
     events_rx: mpsc::UnboundedReceiver<Event>,
-    prompt_tx: mpsc::UnboundedSender<Prompt>,
-    prompt_rx: mpsc::UnboundedReceiver<Prompt>,
     anchors: HashMap<(String, String), ChannelView>,
     running: bool,
     generation: u64,
     server: Option<Server>,
     use_saved_selection: bool,
     configured_only: bool,
+    config_loaded: bool,
+    update_requested: Option<bool>,
+    updating: bool,
 }
 
 impl App {
     fn new(path: PathBuf) -> Self {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
-        let (prompt_tx, prompt_rx) = mpsc::unbounded_channel();
         Self {
             path,
             config: Config::default(),
@@ -83,14 +77,15 @@ impl App {
             jobs: JoinSet::new(),
             events_tx,
             events_rx,
-            prompt_tx,
-            prompt_rx,
             anchors: HashMap::new(),
             running: false,
             generation: 0,
             server: None,
             use_saved_selection: false,
             configured_only: false,
+            config_loaded: false,
+            update_requested: None,
+            updating: false,
         }
     }
 
@@ -347,31 +342,10 @@ impl App {
                 "В служебном режиме вход отключён. Добавьте сессию командой twfarmer login отдельно."
             )
         );
-        let expected = name.map(|name| self.profile(&name)).transpose()?;
-        self.jobs.abort_all();
-        self.generation += 1;
-        let generation = self.generation;
-        let sender = self.prompt_tx.clone();
-        let config = self.config.clone();
-        self.controls.overlay = Some(Overlay::Login {
-            uri: String::new(),
-            code: String::new(),
-        });
-        self.jobs.spawn(async move {
-            let result = async {
-                let client = twitch::http_client()?;
-                auth::authorize_with(&client, &config, move |uri, code| {
-                    let _ = sender.send(Prompt {
-                        generation,
-                        uri,
-                        code,
-                    });
-                })
-                .await
-            }
-            .await;
-            (generation, Job::Authorized { result, expected })
-        });
+        if let Some(name) = &name {
+            self.profile(name)?;
+        }
+        self.controls.edit(EditTarget::Token(name), String::new());
         Ok(())
     }
 
@@ -407,6 +381,24 @@ impl App {
     async fn action(&mut self, action: Action) -> Result<bool> {
         let save_selection = matches!(&action, Action::SaveSelection(_));
         match action {
+            Action::Update(checking) => {
+                ensure!(
+                    !self.updating && self.update_requested.is_none(),
+                    "{}",
+                    tr!(
+                        "An update is already in progress.",
+                        "Обновление уже выполняется."
+                    )
+                );
+                self.update_requested = Some(checking);
+                self.controls.overlay = Some(Overlay::Updating { checking });
+            }
+            Action::CopyLoginLink => {
+                match tokio::task::spawn_blocking(crate::clipboard::copy_login_link).await? {
+                    Ok(outcome) => self.controls.notice = outcome.message().into(),
+                    Err(error) => self.controls.notice = error.to_string(),
+                }
+            }
             Action::Campaigns => {
                 let profiles: Vec<_> = self
                     .profiles
@@ -425,15 +417,11 @@ impl App {
                 self.jobs.abort_all();
                 self.generation += 1;
                 let generation = self.generation;
-                let config = self.config.clone();
                 self.controls.overlay = Some(Overlay::CampaignsLoading);
                 self.jobs.spawn(async move {
                     let mut results = vec![];
                     for profile in profiles {
-                        results.push((
-                            profile.name.clone(),
-                            farmer::campaigns(profile, &config).await,
-                        ));
+                        results.push((profile.name.clone(), farmer::campaigns(profile).await));
                     }
                     (generation, Job::Campaigns { results })
                 });
@@ -533,6 +521,25 @@ impl App {
             }
             Action::SaveEdit(target, text) => {
                 match target {
+                    EditTarget::Token(name) => {
+                        ensure!(
+                            !self.configured_only,
+                            "{}",
+                            tf!(
+                                "Token sign-in is disabled in daemon mode.",
+                                "Вход по токену отключён в служебном режиме."
+                            )
+                        );
+                        let expected = name.map(|name| self.profile(&name)).transpose()?;
+                        self.jobs.abort_all();
+                        self.generation += 1;
+                        let generation = self.generation;
+                        self.controls.overlay = Some(Overlay::TokenChecking);
+                        self.jobs.spawn(async move {
+                            let result = twitch::Twitch::import_token(&text).await;
+                            (generation, Job::Authorized { result, expected })
+                        });
+                    }
                     EditTarget::Config => {
                         let path = control::config_path(&text)?;
                         if !path.exists() {
@@ -665,6 +672,7 @@ impl App {
                 };
                 self.controls.overlay = None;
                 self.rebuild()?;
+                self.config_loaded = true;
                 if start {
                     ensure!(
                         !self.selected.is_empty(),
@@ -811,12 +819,20 @@ pub async fn run(
 }
 
 pub async fn daemon(path: PathBuf, requested: Vec<String>) -> Result<()> {
+    daemon_state(path, requested, true).await
+}
+
+pub async fn daemon_paused(path: PathBuf, requested: Vec<String>) -> Result<()> {
+    daemon_state(path, requested, false).await
+}
+
+async fn daemon_state(path: PathBuf, requested: Vec<String>, start: bool) -> Result<()> {
     // Validate configuration before creating control files.
     Config::read(&path)?;
     run_with_options(
         path,
         RunOptions {
-            start: true,
+            start,
             requested,
             channels: vec![],
             journal: false,
@@ -837,6 +853,7 @@ struct RunOptions {
 }
 
 async fn run_with_options(path: PathBuf, options: RunOptions) -> Result<()> {
+    let executable = std::env::current_exe()?;
     let RunOptions {
         start,
         requested,
@@ -870,7 +887,44 @@ async fn run_with_options(path: PathBuf, options: RunOptions) -> Result<()> {
     let mut ticker = interval(Duration::from_millis(250));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     app.load(path, start, requested);
+    let mut updates = JoinSet::new();
+    let mut next_update = tokio::time::Instant::now();
+    let mut restart = false;
     loop {
+        let manual_update = app.update_requested.take();
+        let editing = matches!(
+            app.controls.overlay,
+            Some(
+                Overlay::Edit { .. }
+                    | Overlay::Settings { .. }
+                    | Overlay::TokenChecking
+                    | Overlay::Loading
+            )
+        );
+        if restart && !editing && app.jobs.is_empty() {
+            break;
+        }
+        if !restart
+            && updates.is_empty()
+            && (manual_update.is_some()
+                || (app.config_loaded
+                    && app.config.auto_update
+                    && !editing
+                    && app.jobs.is_empty()
+                    && tokio::time::Instant::now() >= next_update))
+        {
+            let checking = manual_update.unwrap_or(false);
+            app.updating = true;
+            next_update = tokio::time::Instant::now() + Duration::from_secs(24 * 60 * 60);
+            app.log(
+                tr!(
+                    "Checking GitHub for program updates.",
+                    "Проверяю обновления программы на GitHub."
+                ),
+                false,
+            );
+            updates.spawn(async move { crate::update::run(checking).await });
+        }
         if app.controls.plain_log && screen.is_some() {
             drop(screen.take());
             input = None;
@@ -898,6 +952,27 @@ async fn run_with_options(path: PathBuf, options: RunOptions) -> Result<()> {
             );
         }
         tokio::select! {
+            Some(result) = updates.join_next(), if !updates.is_empty() => {
+                app.updating = false;
+                if matches!(app.controls.overlay, Some(Overlay::Updating { .. })) {
+                    app.controls.overlay = None;
+                }
+                match result {
+                    Ok(Ok(outcome)) => {
+                        app.log(outcome.message(), false);
+                        if matches!(outcome, crate::update::Outcome::Installed(_)) {
+                            restart = true;
+                            if !editing && app.jobs.is_empty() { break; }
+                            app.log(tr!("Update installed; finish editing or sign-in to restart.", "Обновление установлено; завершите редактирование или вход для перезапуска."), false);
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        app.log(tf!("Update: {error:#}", "Обновление: {error:#}"), true);
+                        next_update = tokio::time::Instant::now() + Duration::from_secs(6 * 60 * 60);
+                    }
+                    Err(error) => app.log(tf!("Update task: {error}", "Задача обновления: {error}"), true),
+                }
+            }
             _=ticker.tick() => if let Some(screen)=&mut screen {
                 screen.draw_shell(&app.model,&mut app.view,ShellView {
                     controls:&app.controls,config:&app.config,profiles:&app.profiles,selected:&app.selected,
@@ -905,11 +980,6 @@ async fn run_with_options(path: PathBuf, options: RunOptions) -> Result<()> {
                 })?;
             },
             Some(event)=app.events_rx.recv() => app.apply(event),
-            Some(prompt)=app.prompt_rx.recv() => {
-                if prompt.generation==app.generation {
-                    app.controls.overlay=Some(Overlay::Login {uri:prompt.uri,code:prompt.code});
-                }
-            }
             Some(result)=app.jobs.join_next(), if !app.jobs.is_empty() => {
                 let result=match result {
                     Ok((generation,job)) if generation==app.generation=>app.job(job).await,
@@ -967,9 +1037,23 @@ async fn run_with_options(path: PathBuf, options: RunOptions) -> Result<()> {
             },
         }
     }
+    let restart_args = restart.then(|| restart_arguments(&app)).transpose()?;
+    updates.abort_all();
     app.jobs.abort_all();
     app.stop().await;
     drop(screen);
+    drop(input);
+    app.server = None;
+    if let Some(args) = restart_args {
+        println!(
+            "{}",
+            tr!(
+                "Restarting TwFarmer after the update.",
+                "Перезапускаю TwFarmer после обновления."
+            )
+        );
+        return crate::update::restart(&executable, &args);
+    }
     println!(
         "{}",
         tf!(
@@ -982,9 +1066,108 @@ async fn run_with_options(path: PathBuf, options: RunOptions) -> Result<()> {
     Ok(())
 }
 
+fn restart_arguments(app: &App) -> Result<Vec<std::ffi::OsString>> {
+    let mut args = vec![
+        "--config".into(),
+        local::key(&app.path)?.into_os_string(),
+        "--lang".into(),
+        crate::i18n::current().code().into(),
+    ];
+    if app.configured_only {
+        args.push("daemon".into());
+        if !app.running {
+            args.push("--paused".into());
+        }
+    } else if app.running {
+        args.push("run".into());
+        if app.controls.plain_log {
+            args.push("--no-ui".into());
+        }
+        if app.controls.log_only {
+            args.push("--journal".into());
+        }
+        args.extend(app.temporary.iter().map(std::ffi::OsString::from));
+    } else {
+        args.push("ui".into());
+        if app.controls.plain_log {
+            args.push("--no-ui".into());
+        }
+        if app.controls.log_only {
+            args.push("--journal".into());
+        }
+    }
+    if app.running || app.configured_only {
+        let mut accounts: Vec<_> = app.selected.iter().cloned().collect();
+        accounts.sort();
+        if !accounts.is_empty() {
+            args.push("--account".into());
+            args.push(accounts.join(",").into());
+        }
+    }
+    Ok(args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth;
+
+    #[test]
+    fn update_restart_keeps_active_accounts_temporary_channels_and_daemon_pause() {
+        use clap::Parser;
+        let mut app = App::new(PathBuf::from("config.toml"));
+        app.running = true;
+        app.controls.plain_log = true;
+        app.temporary = vec!["first".into(), "second".into()];
+        app.selected = HashSet::from(["one".into(), "two".into()]);
+        let parse = |app: &App| {
+            let mut args = vec![std::ffi::OsString::from("twfarmer")];
+            args.extend(restart_arguments(app).unwrap());
+            crate::Cli::try_parse_from(args).unwrap()
+        };
+        assert!(
+            matches!(parse(&app).command, Some(crate::Command::Run {channels, accounts, no_ui: true, ..}) if channels == ["first", "second"] && accounts == ["one", "two"])
+        );
+        app.configured_only = true;
+        assert!(
+            matches!(parse(&app).command, Some(crate::Command::Daemon {paused: false, accounts}) if accounts == ["one", "two"])
+        );
+        app.running = false;
+        assert!(matches!(
+            parse(&app).command,
+            Some(crate::Command::Daemon { paused: true, .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn login_opens_hidden_input_and_invalid_tokens_do_not_create_sessions() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = App::new(directory.path().join("config.toml"));
+        app.begin_login(None).unwrap();
+        assert!(matches!(
+            app.controls.overlay,
+            Some(Overlay::Edit {
+                target: EditTarget::Token(None),
+                ..
+            })
+        ));
+        app.controls.paste("invalid secret");
+        let action = app
+            .controls
+            .key(
+                crossterm::event::KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                &[],
+                &app.config,
+                &HashSet::new(),
+            )
+            .unwrap();
+        app.action(action).await.unwrap();
+        assert!(matches!(app.controls.overlay, Some(Overlay::TokenChecking)));
+        let (_, job) = app.jobs.join_next().await.unwrap().unwrap();
+        let error = app.job(job).await.unwrap_err().to_string();
+        assert!(!error.contains("invalid secret"));
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
     #[tokio::test]
     async fn daemon_requires_an_existing_configuration_without_creating_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -1114,8 +1297,6 @@ mod tests {
             "90".into(),
             "20".into(),
             "false".into(),
-            app.config.client_id.clone(),
-            "user_read".into(),
             "en".into(),
             "true".into(),
             "false".into(),

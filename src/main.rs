@@ -4,6 +4,7 @@ mod accounts;
 mod app;
 mod auth;
 mod chat;
+mod clipboard;
 mod config;
 mod control;
 mod drops;
@@ -14,6 +15,7 @@ mod model;
 mod tracking;
 mod twitch;
 mod ui;
+mod update;
 
 use anyhow::{Result, ensure};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -44,6 +46,11 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    #[command(about = tr!("Install the latest stable GitHub release", "Установить последний стабильный релиз GitHub"))]
+    Update {
+        #[arg(long, help = tr!("Check for a release without installing it", "Проверить релиз без установки"))]
+        check: bool,
+    },
     #[command(about = tr!("List available Drops campaigns and account eligibility", "Показать доступные кампании Drops и условия аккаунта"))]
     Drops {
         #[arg(long = "account", value_delimiter = ',')]
@@ -58,6 +65,8 @@ enum Command {
     Ui {
         #[arg(long)]
         journal: bool,
+        #[arg(long, help = tr!("Keep the management server in a plain log", "Оставить сервер управления в обычном журнале"))]
+        no_ui: bool,
     },
     #[command(about = tr!("Start farming in the running program", "Запустить фарм в уже открытой программе"))]
     Start {
@@ -91,6 +100,8 @@ enum Command {
     Login {
         #[arg(long, help = tr!("Twitch login of an existing account to renew", "Логин Twitch для обновления существующего входа"))]
         account: Option<String>,
+        #[arg(long = "stdin", help = tr!("Read a token or redirect URL from stdin without prompting", "Прочитать токен или адрес перенаправления из stdin без запроса ввода"))]
+        token_stdin: bool,
     },
     #[command(about = tr!("Start farming; opens the interface in an interactive terminal", "Запустить фарм; в терминале открывается интерфейс управления"))]
     Run {
@@ -112,6 +123,8 @@ enum Command {
         about = tr!("Daemon startup: existing configuration and saved sessions only", "Служебный запуск: только готовая конфигурация и сохранённые сессии")
     )]
     Daemon {
+        #[arg(long, help = tr!("Start the configured service without starting farming", "Запустить настроенную службу без запуска фарма"))]
+        paused: bool,
         #[arg(
             long = "account",
             value_delimiter = ',',
@@ -352,13 +365,30 @@ async fn execute(cli: Cli) -> Result<()> {
     }
     let terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
     match cli.command {
+        Some(Command::Update { check }) => {
+            println!(
+                "{}",
+                tr!("Checking GitHub Releases…", "Проверяю GitHub Releases…")
+            );
+            let outcome = update::run(check).await?;
+            println!("{}", outcome.message());
+            if matches!(outcome, update::Outcome::Installed(_)) {
+                println!(
+                    "{}",
+                    tr!(
+                        "Restart running instances to use the new version.",
+                        "Перезапустите работающие экземпляры для применения новой версии."
+                    )
+                );
+            }
+        }
         Some(Command::Drops { accounts }) => {
-            let (config, profiles) = prepared(&cli.config).await?;
+            let (_, profiles) = prepared(&cli.config).await?;
             let profiles = accounts::select(&profiles, &accounts)?;
             let mut failed = false;
             for profile in profiles {
                 let name = profile.name.clone();
-                match farmer::campaigns(profile, &config).await {
+                match farmer::campaigns(profile).await {
                     Ok(entries) => {
                         if entries.is_empty() {
                             println!(
@@ -407,16 +437,16 @@ async fn execute(cli: Cli) -> Result<()> {
                 )
             );
         }
-        Some(Command::Ui { journal }) => {
+        Some(Command::Ui { journal, no_ui }) => {
             ensure!(
-                terminal,
+                terminal || no_ui,
                 "{}",
                 tf!(
                     "The interface requires an interactive terminal.",
                     "Интерфейсу нужен интерактивный терминал."
                 )
             );
-            app::run(cli.config, false, vec![], vec![], journal, false).await?;
+            app::run(cli.config, false, vec![], vec![], journal, no_ui).await?;
         }
         None if terminal => app::run(cli.config, false, vec![], vec![], false, false).await?,
         Some(Command::Run {
@@ -435,7 +465,13 @@ async fn execute(cli: Cli) -> Result<()> {
             )
             .await?;
         }
-        Some(Command::Daemon { accounts }) => app::daemon(cli.config, accounts).await?,
+        Some(Command::Daemon { accounts, paused }) => {
+            if paused {
+                app::daemon_paused(cli.config, accounts).await?;
+            } else {
+                app::daemon(cli.config, accounts).await?;
+            }
+        }
         Some(Command::Start { accounts, channels }) => {
             config::normalize_channels(&channels)?;
             println!(
@@ -480,12 +516,37 @@ async fn execute(cli: Cli) -> Result<()> {
                 )
             );
         }
-        Some(Command::Login { account }) => {
+        Some(Command::Login {
+            account,
+            token_stdin,
+        }) => {
             let (mut config, profiles) = prepared(&cli.config).await?;
             let expected = account
                 .map(|login| one(&profiles, Some(login)))
                 .transpose()?;
-            let login = accounts::login(&cli.config, &config, expected.as_ref()).await?;
+            let login = if token_stdin {
+                use std::io::Read;
+                let mut input = String::new();
+                io::stdin().take(8193).read_to_string(&mut input)?;
+                ensure!(
+                    input.len() <= 8192,
+                    "{}",
+                    tf!("Token input is too long", "Ввод токена слишком длинный")
+                );
+                let (session, identity) = twitch::Twitch::import_token(&input).await?;
+                let login =
+                    accounts::save_session(&cli.config, &session, &identity, expected.as_ref())?;
+                println!(
+                    "{}",
+                    tf!(
+                        "Account {login} saved. Campaign links are available.",
+                        "Аккаунт {login} сохранён. Привязки кампаний доступны."
+                    )
+                );
+                login
+            } else {
+                accounts::login(&cli.config, expected.as_ref()).await?
+            };
             if let Some(selected) = &mut config.enabled_accounts
                 && !selected.contains(&login)
             {
@@ -537,7 +598,7 @@ async fn execute(cli: Cli) -> Result<()> {
             AccountsCommand::Add { channels } => {
                 config::normalize_channels(&channels)?;
                 let (mut config, _) = prepared(&cli.config).await?;
-                let login = accounts::login(&cli.config, &config, None).await?;
+                let login = accounts::login(&cli.config, None).await?;
                 if let Some(selected) = &mut config.enabled_accounts
                     && !selected.contains(&login)
                 {
@@ -683,11 +744,10 @@ mod tests {
                 "1",
                 "--claim-bonus",
                 "false",
-                "--oauth-scopes",
-                "",
             ],
             vec!["twfarmer", "start", "--account", "user_one", "channel"],
             vec!["twfarmer", "stop"],
+            vec!["twfarmer", "login", "--stdin"],
             vec!["twfarmer", "quit"],
             vec!["twfarmer", "reload"],
             vec!["twfarmer", "journal", "--enabled", "false"],
@@ -726,7 +786,10 @@ mod tests {
         let cli = Cli::try_parse_from(["twfarmer", "login"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Command::Login { account: None })
+            Some(Command::Login {
+                account: None,
+                token_stdin: false
+            })
         ));
     }
 }

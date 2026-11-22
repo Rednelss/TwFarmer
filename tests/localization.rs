@@ -37,9 +37,17 @@ fn english_default_and_russian_help_cover_nested_commands_and_errors() {
     assert!(stdout(&nested).contains("--farm-drops"));
     assert!(stdout(&nested).contains("--auto-drops"));
     assert!(stdout(&nested).contains("--farming-priority"));
+    assert!(stdout(&nested).contains("--auto-update"));
+    let update = run(directory.path(), &["--lang", "ru", "update", "--help"]);
+    assert!(update.status.success());
+    assert!(stdout(&update).contains("--check"));
     let drops = run(directory.path(), &["--lang", "ru", "drops", "--help"]);
     assert!(drops.status.success());
     assert!(stdout(&drops).contains("доступные кампании Drops"));
+    let login = run(directory.path(), &["--lang", "ru", "login", "--help"]);
+    assert!(login.status.success());
+    assert!(stdout(&login).contains("--stdin"));
+    assert!(!stdout(&login).contains("--token"));
     let invalid = run(directory.path(), &["--lang", "ru", "language", "fr"]);
     assert_eq!(invalid.status.code(), Some(2));
     let error = String::from_utf8_lossy(&invalid.stderr);
@@ -80,6 +88,8 @@ fn language_persists_and_flag_overrides_without_rewriting_saved_settings() {
             "true",
             "--farming-priority",
             "drops",
+            "--auto-update",
+            "false",
         ],
     );
     assert!(changed.status.success());
@@ -91,6 +101,7 @@ fn language_persists_and_flag_overrides_without_rewriting_saved_settings() {
     assert_eq!(settings["claim_drops"].as_bool(), Some(false));
     assert_eq!(settings["auto_drops"].as_bool(), Some(true));
     assert_eq!(settings["farming_priority"].as_str(), Some("drops"));
+    assert_eq!(settings["auto_update"].as_bool(), Some(false));
     assert_eq!(settings["channels"][0].as_str(), Some("welovegames"));
 }
 

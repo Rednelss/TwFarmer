@@ -31,6 +31,8 @@ impl FarmingPriority {
 
 #[derive(clap::Args, Default)]
 pub struct SettingsPatch {
+    #[arg(long, value_parser=clap::value_parser!(bool), help = tr!("Install stable GitHub updates automatically and restart", "Автоматически устанавливать стабильные обновления GitHub и перезапускаться"))]
+    pub auto_update: Option<bool>,
     #[arg(long, value_enum, help = tr!("Fill video slots with points or Drops first", "В первую очередь занимать видеослоты баллами или Drops"))]
     pub farming_priority: Option<FarmingPriority>,
     #[arg(long, value_parser=clap::value_parser!(bool), help = tr!("Find eligible Drops campaigns and channels automatically", "Автоматически искать доступные кампании Drops и каналы"))]
@@ -51,17 +53,13 @@ pub struct SettingsPatch {
     pub watch_interval_seconds: Option<u64>,
     #[arg(long, value_parser=clap::value_parser!(bool), help = tr!("Claim available channel point bonuses automatically", "Автоматически забирать доступные бонусы баллов канала"))]
     pub claim_bonus: Option<bool>,
-    #[arg(long, help = tr!("Twitch OAuth client ID; changing it requires signing in again", "ID клиента OAuth Twitch; после изменения нужен повторный вход"))]
-    pub client_id: Option<String>,
-    #[arg(
-        long,
-        help = tr!("Scopes separated by spaces or commas; an empty string clears the list", "Scopes через пробел или запятую; пустая строка очищает список")
-    )]
-    pub oauth_scopes: Option<String>,
 }
 impl SettingsPatch {
     pub fn apply(self, config: &Config) -> Result<Config> {
         let mut next = config.clone();
+        if let Some(value) = self.auto_update {
+            next.auto_update = value;
+        }
         if let Some(value) = self.farming_priority {
             next.farming_priority = value;
         }
@@ -92,26 +90,15 @@ impl SettingsPatch {
         if let Some(value) = self.claim_bonus {
             next.claim_bonus = value;
         }
-        if let Some(value) = self.client_id {
-            next.client_id = value.trim().into();
-        }
-        if let Some(value) = self.oauth_scopes {
-            next.oauth_scopes = value
-                .split(|c: char| c == ',' || c.is_whitespace())
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-                .collect();
-        }
         next.validate()?;
         Ok(next)
     }
 }
 
-pub const CLIENT_ID: &str = "ue6666qo983tsx6so1t0vnawi233wa";
-
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    pub auto_update: bool,
     pub farming_priority: FarmingPriority,
     pub auto_drops: bool,
     pub farm_drops: bool,
@@ -126,13 +113,12 @@ pub struct Config {
     pub poll_interval_seconds: u64,
     pub watch_interval_seconds: u64,
     pub claim_bonus: bool,
-    pub client_id: String,
-    pub oauth_scopes: Vec<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
+            auto_update: true,
             farming_priority: FarmingPriority::Points,
             auto_drops: false,
             farm_drops: true,
@@ -146,8 +132,6 @@ impl Default for Config {
             poll_interval_seconds: 60,
             watch_interval_seconds: 20,
             claim_bonus: true,
-            client_id: CLIENT_ID.into(),
-            oauth_scopes: vec!["user_read".into()],
         }
     }
 }
@@ -164,7 +148,15 @@ impl Config {
                 path.display()
             )
         })?;
-        let mut config: Self = toml::from_str(&text).context(tr!(
+        let mut value: toml::Value = toml::from_str(&text).context(tr!(
+            "Invalid TOML configuration",
+            "Ошибка в TOML-конфигурации"
+        ))?;
+        if let Some(table) = value.as_table_mut() {
+            table.remove("client_id");
+            table.remove("oauth_scopes");
+        }
+        let mut config: Self = value.try_into().context(tr!(
             "Invalid TOML configuration",
             "Ошибка в TOML-конфигурации"
         ))?;
@@ -215,12 +207,6 @@ impl Config {
                 "watch_interval_seconds: from 15 to 60",
                 "watch_interval_seconds: от 15 до 60"
             )
-        );
-        ensure!(
-            !config.client_id.is_empty()
-                && config.client_id.chars().all(|c| c.is_ascii_alphanumeric()),
-            "{}",
-            tf!("Invalid client_id", "Неверный client_id")
         );
         Ok(())
     }
@@ -394,19 +380,17 @@ pub fn normalize_channels(values: &[String]) -> Result<Vec<String>> {
 mod tests {
     use super::*;
     #[test]
-    fn patches_validate_settings_and_allow_clearing_scopes() {
+    fn patches_validate_settings() {
         let config = Config::default();
         let next = SettingsPatch {
             max_channels: Some(1),
             claim_bonus: Some(false),
-            oauth_scopes: Some("".into()),
             ..SettingsPatch::default()
         }
         .apply(&config)
         .unwrap();
         assert_eq!(next.max_channels, 1);
         assert!(!next.claim_bonus);
-        assert!(next.oauth_scopes.is_empty());
         assert!(
             SettingsPatch {
                 watch_interval_seconds: Some(1),
@@ -416,6 +400,21 @@ mod tests {
             .is_err()
         );
         assert_eq!(config.max_channels, 2);
+    }
+
+    #[test]
+    fn legacy_authorization_settings_do_not_affect_saved_farming_options() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        fs::write(&path, "channels = ['channel']\nclient_id = 'old-tv-client'\noauth_scopes = ['user_read']\nmax_channels = 1\n").unwrap();
+        let config = Config::read(&path).unwrap();
+        assert_eq!(config.channels, ["channel"]);
+        assert_eq!(config.max_channels, 1);
+        config.save(&path).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains("client_id") && !saved.contains("oauth_scopes"));
+        fs::write(&path, "unknown_option = true\n").unwrap();
+        assert!(Config::read(&path).is_err());
     }
 
     #[test]

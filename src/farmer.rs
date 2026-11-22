@@ -196,7 +196,7 @@ pub async fn run(
             profile.name
         )
     );
-    let mut twitch = Twitch::connect(&config, profile.path).await?;
+    let mut twitch = Twitch::connect(profile.path).await?;
     reserve_user(&users, &twitch.identity.user_id, &profile.name)?;
     reporter.account(
         Some(twitch.identity.login.clone()),
@@ -783,18 +783,12 @@ pub async fn run(
     }
 }
 
-pub async fn campaigns(
-    profile: Profile,
-    config: &Config,
-) -> Result<Vec<crate::drops::CatalogEntry>> {
-    Twitch::connect(config, profile.path)
-        .await?
-        .available_drops()
-        .await
+pub async fn campaigns(profile: Profile) -> Result<Vec<crate::drops::CatalogEntry>> {
+    Twitch::connect(profile.path).await?.available_drops().await
 }
 
 pub async fn status(profile: Profile, config: Config, reporter: Reporter) -> Result<()> {
-    let twitch = Twitch::connect(&config, profile.path).await?;
+    let twitch = Twitch::connect(profile.path).await?;
     reporter.account(
         Some(twitch.identity.login.clone()),
         AccountStatus::Idle,
