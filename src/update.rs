@@ -503,13 +503,32 @@ mod tests {
     }
 
     // These fixtures run only in a copy of the test binary created by the test above.
+    fn assert_fixture_directory(executable: &Path, root: &Path) {
+        assert_eq!(
+            executable.parent().unwrap().canonicalize().unwrap(),
+            root.canonicalize().unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fixture_directory_accepts_aliases_of_the_same_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let actual = directory.path().join("actual");
+        let alias = directory.path().join("alias");
+        fs::create_dir(&actual).unwrap();
+        std::os::unix::fs::symlink(&actual, &alias).unwrap();
+        assert_fixture_directory(&alias.join("twfarmer"), &actual);
+        assert_fixture_directory(&actual.join("twfarmer"), &alias);
+    }
+
     #[test]
     fn replacement_fixture() {
         let Some(root) = std::env::var_os("TWFARMER_TEST_UPDATE_DIRECTORY") else {
             return;
         };
         let executable = std::env::current_exe().unwrap();
-        assert_eq!(executable.parent().unwrap(), Path::new(&root));
+        assert_fixture_directory(&executable, Path::new(&root));
         fs::write(
             Path::new(&root).join("before.pid"),
             std::process::id().to_string(),
@@ -536,7 +555,7 @@ mod tests {
             return;
         };
         let root = Path::new(&root);
-        assert_eq!(std::env::current_exe().unwrap().parent().unwrap(), root);
+        assert_fixture_directory(&std::env::current_exe().unwrap(), root);
         #[cfg(unix)]
         {
             let previous_pid: u32 = fs::read_to_string(root.join("before.pid"))

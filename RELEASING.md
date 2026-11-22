@@ -6,7 +6,8 @@
 
 1. Update `version` in `Cargo.toml` and the corresponding `Cargo.lock` package.
 2. Update `CHANGELOG.md`, `CHANGELOG.ru.md`, `packaging/RELEASE_NOTES.md`, and
-   `packaging/RELEASE_NOTES.ru.md`. Keep both documentation languages current.
+   `packaging/RELEASE_NOTES.ru.md`, including the version examples in both
+   `RELEASING` guides. Keep both documentation languages current.
 3. Run the checks and build:
 
    ```bash
@@ -17,15 +18,17 @@
    python3 -m unittest discover -s scripts -p 'test_*.py'
    ```
 
-4. Check `--version`, first setup, sign-in, farming, and switching between
-   English and Russian. Automated tests do not confirm actual Twitch points.
+4. Check `--version`, first setup, native token sign-in, F2 URL copying, farming,
+   `update --check`, and switching between English and Russian. Test update
+   replacement and restart using a temporary executable; the automated updater
+   tests cover this on each CI platform. Automated tests do not confirm actual Twitch points.
 5. Review changes before committing. Local configuration, sessions, and control
    files are ignored; do not force-add them.
 
 ## GitHub Release
 
 To release from the GitHub website, first push the checked changes to `main`.
-Open **Releases > Draft a new release**, choose **v0.2.1** as a new tag and
+Open **Releases > Draft a new release**, choose **v0.3.0** as a new tag and
 **main** as its target, enter a title and description, and click **Publish release**.
 For later versions, use a tag that matches `Cargo.toml`.
 Publishing starts the `Release` workflow; saving a draft does not.
@@ -35,11 +38,11 @@ that release. The release is public while the build runs.
 To start a build from the terminal:
 
 Commit the checked changes and push `main`, then create a tag matching the
-package version. For version 0.2.1:
+package version. For version 0.3.0:
 
 ```bash
-git tag -a v0.2.1 -m "TwFarmer v0.2.1"
-git push origin v0.2.1
+git tag -a v0.3.0 -m "TwFarmer v0.3.0"
+git push origin v0.3.0
 ```
 
 The `Release` workflow runs checks on Linux, Windows, and macOS, checks Rust 1.89
@@ -62,6 +65,31 @@ the same names. Publishing a draft that already has all three archives and
 GitHub Actions must be enabled in the repository. Only the asset publication job
 receives `contents: write`; no personal access token is needed.
 Publishing to crates.io is disabled.
+
+## Automatic update requirements
+
+The updater reads the latest published stable release from
+`https://api.github.com/repos/Rednelss/TwFarmer/releases/latest`. Publish it as
+the latest release; drafts and prereleases are excluded.
+
+Keep the archive names in the table above and attach `SHA256SUMS` with the
+SHA-256 of each archive. The workflow generates these files. Renaming assets
+or omitting the checksum file prevents installation. If a release is published
+before its assets finish building, clients keep the existing executable and
+retry after six hours; a manual `update` can run once the files are ready.
+
+Starting with 0.3.0, automatic updates are enabled by default. They check at
+startup and every 24 hours, verify the archive, and restart with active accounts
+and channels. Linux keeps the systemd PID. `update --check` checks without
+installing; `settings set --auto-update false` disables automatic installation.
+The executable directory must be writable.
+
+The first upgrade from 0.2.x to 0.3.0 requires manual installation. Old TV sessions
+without access to campaign links require a new `login`; keep the same working
+directory or `--config` path to preserve channel lists.
+
+Builds use the tagged commit. Commit and push all release fixes before creating
+the tag; rerunning a workflow for an older tag does not include later changes to `main`.
 
 ## Local Linux archive
 
