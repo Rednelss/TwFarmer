@@ -1,26 +1,32 @@
-TwFarmer 0.1.1 adds chat presence while farming. Each active account joins the
-chats of all channels in its shared, personal, or temporary list, including
-offline channels.
+TwFarmer 0.2.0 adds Drops farming and updates the terminal controls.
 
-- Encrypted IRC connection with keepalive, reconnection, and refreshed credentials.
-- A channel that rejects membership does not disconnect the other chats.
-- Chat state and errors in channel details; a `CHAT` column on wide terminals.
-- `chat_presence` is enabled by default and can be changed in **Farming settings >
-  Join chat** or with `settings set --chat-presence false`.
+- Watch-based Drops, daily rewards, and automatic claims. Progress and claim
+  status come from Twitch and appear alongside channel points.
+- Available campaigns for each account, with eligibility and connection checks.
+  Enable **Find Drops channels automatically** to discover participating streams,
+  even with an empty channel list.
+- **Points first** is the default. Choose **Drops first** to reserve one stream
+  for Drops. With two slots, the other can earn points; a stream earning both
+  occupies one slot. Each account uses at most one Drops stream.
+- Grouped menu and settings switches operated with arrows or Space. F2 opens
+  advanced settings. Use `d` for Drops, `p` for settings, and `?` for help.
+- Higher-contrast channel states and log timestamps; help can be scrolled.
+- The Drops browser starts with eligible rewards. Tab shows all campaigns and
+  their requirements; `r` refreshes. Enter expands selected reward details for scrolling.
+- Fewer repeated logs, catalog copies, and unnecessary campaign scans. Automatic
+  stream changes keep configured chats connected.
 
-Stopping farming, checking balances, or exiting closes the chat connection.
-The program sends no chat messages and does not store incoming messages.
+Existing configuration and saved sessions remain compatible. Replace the binary
+and keep the same working directory or `--config` path. Restart the systemd user
+service after updating. Automatic discovery is off unless `auto_drops` is enabled.
 
-Existing configuration and session files remain compatible. After replacing
-the binary, use the same working directory or `--config` path as before.
-For systemd, replace the installed binary and restart the user service.
+Twitch controls credited minutes and reward delivery. Account linking, purchases,
+and manual reward choices stay on Twitch. Simultaneous viewing of different
+Drops campaigns did not provide stable progress and is not scheduled.
+Bot loyalty balances remain separate from Twitch channel points.
 
-StreamElements and other bots maintain separate loyalty balances. Awarding
-points for chat presence depends on the broadcaster's settings; some rules
-require activity or a live stream. The dashboard shows Twitch channel points.
-
-Extract the archive for your system and run `twfarmer` (`twfarmer.exe` on Windows).
-Archives include English and Russian documentation, example configuration,
-and the MIT license. Linux also includes a systemd user unit.
-The GitHub Actions Linux build requires glibc 2.35 or newer.
-Archive checksums are in `SHA256SUMS`.
+Download the archive for your system and extract it. Windows uses `twfarmer.exe`;
+Linux and macOS use `twfarmer`. Archives include English and Russian documentation,
+an example configuration, and the MIT license. Linux also includes a systemd user
+unit. GitHub Actions Linux builds require glibc 2.35 or newer.
+Verify archive checksums against `SHA256SUMS` attached to the release.

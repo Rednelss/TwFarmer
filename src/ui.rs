@@ -1,7 +1,7 @@
 use crate::{
     accounts::Profile,
     config::Config,
-    control::{Controls, EditTarget, Overlay, menu_items, settings_fields},
+    control::{Controls, EditTarget, MenuItem, Overlay, SettingField, visible_campaigns},
     model::{AccountStatus, ChannelStatus, ChatStatus, Dashboard, duration_text},
 };
 use anyhow::{Context, Result};
@@ -26,6 +26,15 @@ use std::{
     io::{self, Stdout},
     path::Path,
 };
+
+const BACKGROUND: Color = Color::Rgb(18, 22, 28);
+const TEXT: Color = Color::Rgb(220, 225, 230);
+const MUTED: Color = Color::Rgb(146, 162, 180);
+const SELECTED: Color = Color::Rgb(38, 51, 63);
+const ACCENT: Color = Color::Rgb(99, 202, 218);
+const SUCCESS: Color = Color::Rgb(121, 213, 159);
+const WARNING: Color = Color::Rgb(238, 196, 106);
+const ERROR: Color = Color::Rgb(247, 144, 137);
 use tokio::time::Instant;
 
 pub struct Screen {
@@ -144,18 +153,22 @@ impl ViewState {
 
 fn status_style(status: &ChannelStatus) -> Style {
     let color = match status {
-        ChannelStatus::Watching => Color::Green,
-        ChannelStatus::Error => Color::Red,
-        ChannelStatus::Retry(_) => Color::Yellow,
-        ChannelStatus::Starting | ChannelStatus::Checking => Color::Cyan,
-        ChannelStatus::Online | ChannelStatus::Queued => Color::White,
-        ChannelStatus::Idle | ChannelStatus::Offline | ChannelStatus::Disabled => Color::DarkGray,
+        ChannelStatus::Watching => SUCCESS,
+        ChannelStatus::Error => ERROR,
+        ChannelStatus::Retry(_) => WARNING,
+        ChannelStatus::Starting | ChannelStatus::Checking => ACCENT,
+        ChannelStatus::Online | ChannelStatus::Queued => TEXT,
+        ChannelStatus::Idle | ChannelStatus::Offline | ChannelStatus::Disabled => MUTED,
     };
     Style::default().fg(color)
 }
 
 pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
     let area = frame.area();
+    frame.render_widget(
+        Block::default().style(Style::default().fg(TEXT).bg(BACKGROUND)),
+        area,
+    );
     let log_height = if area.height >= 28 {
         7
     } else if area.height >= 20 {
@@ -170,7 +183,7 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
             Constraint::Length(3),
             Constraint::Min(3),
             Constraint::Length(if area.height >= 24 {
-                6
+                8
             } else if area.height >= 20 {
                 5
             } else {
@@ -193,9 +206,7 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
     let header = Line::from(vec![
         Span::styled(
             " TwFarmer ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         ),
         Span::raw(tf!(
             " {}  •  Accounts {running}/{}  •  Farming {watching}  •  ",
@@ -205,7 +216,7 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
         )),
         Span::styled(
             tf!("{:+} points", "{:+} баллов", dashboard.gain()),
-            Style::default().fg(Color::Green),
+            Style::default().fg(SUCCESS),
         ),
         Span::raw(tf!(
             "  •  Bonuses {}",
@@ -230,11 +241,7 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
     frame.render_widget(
         Tabs::new(tabs)
             .select(state.filter.map_or(0, |n| n + 1))
-            .highlight_style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )
+            .highlight_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
             .block(
                 Block::default()
                     .title(tr!(" Twitch accounts ", " Аккаунты Twitch "))
@@ -277,10 +284,13 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
     if chat_column {
         headers.push(tr!("CHAT", "ЧАТ"));
     }
+    if wide {
+        headers.push("DROPS");
+    }
     let widths: Vec<_> = (if chat_column {
-        vec![16, 17, 15, 9, 9, 6, 9, 7, 12]
+        vec![14, 15, 14, 8, 7, 6, 8, 6, 10, 12]
     } else if wide {
-        vec![18, 19, 17, 11, 11, 7, 10, 7]
+        vec![16, 17, 16, 9, 8, 6, 9, 6, 13]
     } else if medium {
         vec![19, 23, 23, 14, 13, 8]
     } else {
@@ -314,9 +324,9 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
                     .map_or_else(|| "-".into(), |n| n.to_string()),
             ),
             Cell::from(gain).style(Style::default().fg(if channel.gain() < 0 {
-                Color::Yellow
+                WARNING
             } else {
-                Color::Green
+                SUCCESS
             })),
         ];
         if medium {
@@ -324,26 +334,31 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
         }
         if wide {
             cells.push(Cell::from(duration_text(channel.active_time)));
-            cells.push(Cell::from(channel.last_update.map_or_else(
-                || "-".into(),
-                |at| {
-                    tf!(
-                        "{}s",
-                        "{}с",
-                        Instant::now().saturating_duration_since(at).as_secs()
-                    )
-                },
-            )));
+            cells.push(Cell::from(
+                channel.last_update.max(channel.drops_updated).map_or_else(
+                    || "-".into(),
+                    |at| {
+                        tf!(
+                            "{}s",
+                            "{}с",
+                            Instant::now().saturating_duration_since(at).as_secs()
+                        )
+                    },
+                ),
+            ));
         }
         if chat_column {
             let color = match channel.chat_status {
-                ChatStatus::Joined => Color::Green,
-                ChatStatus::Connecting => Color::Cyan,
-                ChatStatus::Retry(_) => Color::Yellow,
-                ChatStatus::Error => Color::Red,
-                ChatStatus::Disabled => Color::Gray,
+                ChatStatus::Joined => SUCCESS,
+                ChatStatus::Connecting => ACCENT,
+                ChatStatus::Retry(_) => WARNING,
+                ChatStatus::Error => ERROR,
+                ChatStatus::Disabled => MUTED,
             };
             cells.push(Cell::from(channel.chat_status.label()).style(Style::default().fg(color)));
+        }
+        if wide {
+            cells.push(Cell::from(channel.drops_label()));
         }
         Row::new(cells)
     });
@@ -351,21 +366,17 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
         Table::new(rows, widths)
             .header(
                 Row::new(headers)
-                    .style(
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    )
+                    .style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
                     .bottom_margin(1),
             )
             .column_spacing(1)
-            .row_highlight_style(Style::default().bg(Color::DarkGray))
+            .row_highlight_style(Style::default().bg(SELECTED))
             .highlight_symbol("› ")
             .block(
                 Block::default()
                     .title(tr!(
-                        " Channels • up to 2 concurrent channels per account ",
-                        " Каналы • до 2 одновременно на аккаунт "
+                        " Channels • up to 2 streams per account • at most 1 for Drops ",
+                        " Каналы • до 2 потоков на аккаунт • не более 1 для Drops "
                     ))
                     .borders(Borders::ALL),
             ),
@@ -388,7 +399,7 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
         let message = channel.error.as_ref().or(account.error.as_ref()).cloned().unwrap_or_else(|| {
             match channel.status {
                 ChannelStatus::Offline => tr!("Waiting for the next stream.", "Ожидание следующего эфира.").into(),
-                ChannelStatus::Queued => tr!("Waiting for a free slot; channel order sets priority.", "Ожидание свободного места; приоритет задан порядком каналов.").into(),
+                ChannelStatus::Queued => tr!("Waiting for a free slot; Drops use one stream per account.", "Ожидание свободного места; Drops используют один поток на аккаунт.").into(),
                 ChannelStatus::Disabled => tr!("Channel points are disabled for this channel.", "На канале выключены баллы.").into(),
                 _ => tr!("Twitch provides the balance. The first points usually arrive after a few minutes.", "Баланс приходит из Twitch. Первые баллы обычно появляются через несколько минут.").into(),
             }
@@ -399,11 +410,32 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
             .as_ref()
             .map(|error| format!(": {error}"))
             .unwrap_or_default();
+        let drops = channel.drops_error.as_ref().map_or_else(
+            || {
+                if channel.drops.is_empty() {
+                    channel.drops_label()
+                } else {
+                    channel
+                        .drops
+                        .iter()
+                        .map(|d| d.detail())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }
+            },
+            |error| {
+                tf!(
+                    "Progress unavailable: {error}",
+                    "Прогресс недоступен: {error}"
+                )
+            },
+        );
         tf!(
-            "{} • {} • last request: {last}\nChat: {chat}{chat_error}\n{message}",
-            "{} • {} • последнее обращение: {last}\nЧат: {chat}{chat_error}\n{message}",
+            "{} • {} • last request: {last}\nFarming: {}\nChat: {chat}{chat_error}\nDrops: {drops}\n{message}",
+            "{} • {} • последнее обращение: {last}\nФарм: {}\nЧат: {chat}{chat_error}\nDrops: {drops}\n{message}",
             account.login.as_deref().unwrap_or(&account.name),
-            channel.name
+            channel.name,
+            channel.farm_role.label()
         )
     } else if let Some(account) = state.filter.and_then(|n| dashboard.accounts.get(n)) {
         account.error.clone().unwrap_or_else(|| {
@@ -441,15 +473,11 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
             Line::from(vec![
                 Span::styled(
                     format!("{} {}: ", duration_text(elapsed), log.profile),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(MUTED),
                 ),
                 Span::styled(
                     log.message.clone(),
-                    Style::default().fg(if log.error {
-                        Color::Yellow
-                    } else {
-                        Color::White
-                    }),
+                    Style::default().fg(if log.error { WARNING } else { TEXT }),
                 ),
             ])
         })
@@ -467,7 +495,7 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
             " ↑/↓ or j/k: channels  •  Tab: accounts  •  PgUp/PgDn: scroll  •  q / Ctrl+C: quit",
             " ↑/↓ или j/k: каналы  •  Tab: аккаунты  •  PgUp/PgDn: прокрутка  •  q / Ctrl+C: выход"
         ))
-        .style(Style::default().fg(Color::DarkGray)),
+        .style(Style::default().fg(MUTED)),
         chunks[5],
     );
 }
@@ -534,7 +562,8 @@ pub fn render_shell(
                         " Log • l to return to the table ",
                         " Журнал • l: вернуться к таблице "
                     ))
-                    .borders(Borders::ALL),
+                    .borders(Borders::ALL)
+                    .style(Style::default().fg(TEXT).bg(BACKGROUND)),
             ),
             log_area,
         );
@@ -546,25 +575,37 @@ pub fn render_shell(
         3.min(area.height),
     );
     frame.render_widget(Clear, footer);
-    let source = if shell.temporary.is_empty() {
+    let source = if shell.config.automatic_drops() && shell.temporary.is_empty() {
+        tr!(
+            "saved lists + auto Drops",
+            "сохранённые списки + авто-Drops"
+        )
+        .into()
+    } else if shell.temporary.is_empty() {
         tr!("saved lists", "сохранённые списки").into()
     } else {
         tf!("temporary: {}", "временные: {}", shell.temporary.join(", "))
     };
     frame.render_widget(Paragraph::new(vec![
-        Line::from(Span::styled(&shell.controls.notice,Style::default().fg(Color::Yellow))),
+        Line::from(Span::styled(&shell.controls.notice,Style::default().fg(WARNING))),
         Line::from(tf!("Selected {}/{} • {} • {}", "Выбрано {}/{} • {} • {}",shell.selected.len(),shell.profiles.len(),source,shell.path.display())),
-        Line::from(Span::styled(tr!(" m / F1: menu • s: start • x: stop • a: login • c: channels • Tab: account • q: quit", " m / F1: меню • s: старт • x: стоп • a: вход • c: каналы • Tab: аккаунт • q: выход"),
-            Style::default().fg(Color::Cyan))),
-    ]),footer);
+        Line::from(Span::styled(tr!(" m/F1: menu • s: start • x: stop • d: Drops • p: settings • ?: help • q: quit", " m/F1: меню • s: старт • x: стоп • d: Drops • p: настройки • ?: помощь • q: выход"),
+            Style::default().fg(ACCENT))),
+    ]).style(Style::default().fg(TEXT).bg(BACKGROUND)),footer);
 
     let Some(overlay) = &shell.controls.overlay else {
         return;
     };
     let height = match overlay {
-        Overlay::Menu(_) => 23,
-        Overlay::Help => 24,
-        Overlay::Settings { .. } => 22,
+        Overlay::Menu(_) => 30,
+        Overlay::Help(_) | Overlay::Campaigns { .. } => 24,
+        Overlay::Settings { advanced, .. } => {
+            if *advanced {
+                30
+            } else {
+                22
+            }
+        }
         Overlay::Accounts { .. } | Overlay::Pick { .. } => 20,
         Overlay::Login { .. } => 14,
         _ => 12,
@@ -572,6 +613,9 @@ pub fn render_shell(
     let rect = popup(area, 100, height);
     frame.render_widget(Clear, rect);
     let title = match overlay {
+        Overlay::Campaigns { .. } | Overlay::CampaignsLoading => {
+            tr!("Available Drops campaigns", "Доступные кампании Drops")
+        }
         Overlay::Language(_) => "Language / Язык",
         Overlay::Menu(_) => tr!("Menu", "Меню"),
         Overlay::Accounts { .. } => tr!("Accounts to start", "Аккаунты для запуска"),
@@ -589,20 +633,33 @@ pub fn render_shell(
                 "Открыть / создать конфигурацию"
             ),
         },
+        Overlay::Settings { advanced: true, .. } => tr!(
+            "Farming settings + advanced",
+            "Настройки фарма + технические"
+        ),
         Overlay::Settings { .. } => tr!("Farming settings", "Настройки фарма"),
         Overlay::Login { .. } => tr!("Twitch sign-in", "Вход в Twitch"),
         Overlay::Loading => tr!("Loading accounts", "Загрузка аккаунтов"),
-        Overlay::Help => tr!("Help", "Помощь"),
+        Overlay::Help(_) => tr!("Help", "Помощь"),
     };
     let block = Block::default()
         .title(format!(" {title} "))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .style(Style::default().fg(TEXT).bg(BACKGROUND))
+        .border_style(Style::default().fg(ACCENT));
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
     let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(3)]).split(inner);
-    let highlight = Style::default().bg(Color::DarkGray).fg(Color::Cyan);
+    let highlight = Style::default().bg(SELECTED).fg(ACCENT);
     let help = match overlay {
+        Overlay::Campaigns { expanded: true, .. } => tr!(
+            "↑↓/PgUp/PgDn: scroll • Enter: list • Esc: close",
+            "↑↓/PgUp/PgDn: прокрутка • Enter: список • Esc: закрыть"
+        ),
+        Overlay::Campaigns { .. } => tr!(
+            "↑↓: select • Enter: details • Tab: eligible/all\nr: refresh • PgUp/PgDn: page • Esc: close",
+            "↑↓: выбор • Enter: подробнее • Tab: доступные/все\nr: обновить • PgUp/PgDn: страница • Esc: закрыть"
+        ),
         Overlay::Language(_) => tr!(
             "↑/↓: language • Enter: save • Esc: cancel",
             "↑/↓: язык • Enter: сохранить • Esc: отмена"
@@ -619,10 +676,14 @@ pub fn render_shell(
                 "↑/↓: выбрать • Enter: выполнить • Esc: закрыть"
             )
         }
+        Overlay::Settings { .. } if inner.width < 60 => tr!(
+            "↑↓: field  ←→: change\nF2: more  Enter: save  Esc: cancel",
+            "↑↓: поле  ←→: выбор\nF2: ещё  Enter: сохранить  Esc: отмена"
+        ),
         Overlay::Settings { .. } => {
             tr!(
-                "Tab / ↑↓: field • Ctrl+U: clear • Enter: save • Esc: cancel",
-                "Tab / ↑↓: поле • Ctrl+U: очистить • Enter: сохранить • Esc: отмена"
+                "Tab/↑↓: field • ←→/Space: change\nF2: advanced • Ctrl+U: clear text • Enter: save • Esc: cancel",
+                "Tab/↑↓: поле • ←→/Пробел: изменить\nF2: технические • Ctrl+U: очистить текст • Enter: сохранить • Esc: отмена"
             )
         }
         Overlay::Edit { .. } => {
@@ -631,7 +692,7 @@ pub fn render_shell(
                 "←/→: курсор • Ctrl+U: очистить • Enter: сохранить • Esc: отмена"
             )
         }
-        Overlay::Login { .. } | Overlay::Loading => {
+        Overlay::Login { .. } | Overlay::Loading | Overlay::CampaignsLoading => {
             tr!(
                 "Esc to cancel. Other accounts continue running.",
                 "Esc для отмены. Остальные аккаунты продолжают работать."
@@ -641,13 +702,16 @@ pub fn render_shell(
             "←/→ or Tab: select • Enter: confirm • Esc: cancel",
             "←/→ или Tab: выбор • Enter: подтвердить • Esc: отменить"
         ),
-        Overlay::Help => tr!("Enter / Esc to close", "Enter / Esc для закрытия"),
+        Overlay::Help(_) => tr!(
+            "↑↓ / PgUp/PgDn: scroll • Enter / Esc: close",
+            "↑↓ / PgUp/PgDn: прокрутка • Enter / Esc: закрыть"
+        ),
     };
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled(
                 &shell.controls.notice,
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(WARNING),
             )),
             Line::from(help),
         ])
@@ -655,6 +719,99 @@ pub fn render_shell(
         chunks[1],
     );
     match overlay {
+        Overlay::CampaignsLoading => {
+            frame.render_widget(
+                Paragraph::new(tr!(
+                    "Checking campaign eligibility for selected accounts…",
+                    "Проверяю доступность кампаний для выбранных аккаунтов…"
+                ))
+                .wrap(Wrap { trim: false }),
+                chunks[0],
+            );
+        }
+        Overlay::Campaigns {
+            index,
+            entries,
+            errors,
+            show_all,
+            expanded,
+            scroll,
+        } => {
+            let mut detail = errors.join("\n");
+            if let Some((account, entry)) = visible_campaigns(entries, *show_all).nth(*index) {
+                if !detail.is_empty() {
+                    detail.push('\n');
+                }
+                detail.push_str(&format!("[{account}] {}", entry.detail()));
+            }
+            if *expanded {
+                if detail.is_empty() {
+                    detail = tr!(
+                        "No reward selected. Enter returns to the list; Tab shows all campaigns.",
+                        "Награда не выбрана. Enter возвращает к списку; Tab показывает все кампании."
+                    ).into();
+                }
+                frame.render_widget(
+                    Paragraph::new(detail)
+                        .wrap(Wrap { trim: false })
+                        .scroll((*scroll, 0)),
+                    chunks[0],
+                );
+                return;
+            }
+            let panels = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(7.min(chunks[0].height / 2)),
+            ])
+            .split(chunks[0]);
+            let count = visible_campaigns(entries, *show_all).count();
+            frame.render_widget(
+                Paragraph::new(tf!(
+                    "{}: {count}/{} rewards",
+                    "{}: {count}/{} наград",
+                    if *show_all {
+                        tr!("All campaigns", "Все кампании")
+                    } else {
+                        tr!("Eligible campaigns", "Доступные кампании")
+                    },
+                    entries.len()
+                )),
+                panels[0],
+            );
+            if count == 0 {
+                frame.render_widget(
+                    Paragraph::new(tr!(
+                        "No eligible rewards. Tab shows all campaigns and their requirements.",
+                        "Нет доступных наград. Tab покажет все кампании и их условия."
+                    ))
+                    .wrap(Wrap { trim: false }),
+                    panels[1],
+                );
+            }
+            let items = visible_campaigns(entries, *show_all).map(|(account, entry)| {
+                ListItem::new(vec![
+                    Line::from(format!(
+                        "[{account}] {} / {}",
+                        entry.drop.campaign, entry.drop.reward
+                    )),
+                    Line::from(Span::styled(
+                        entry.drop.label(),
+                        Style::default().fg(ACCENT),
+                    )),
+                ])
+            });
+            if count > 0 {
+                frame.render_stateful_widget(
+                    List::new(items)
+                        .highlight_style(highlight)
+                        .highlight_symbol("› "),
+                    panels[1],
+                    &mut ListState::default().with_selected(Some(*index)),
+                );
+            }
+            frame.render_widget(Paragraph::new(detail).wrap(Wrap { trim: false }), panels[2]);
+        }
         Overlay::Language(index) => {
             frame.render_stateful_widget(
                 List::new(["English", "Русский"])
@@ -665,13 +822,28 @@ pub fn render_shell(
             );
         }
         Overlay::Menu(index) => {
-            let items = menu_items().into_iter().map(ListItem::new);
+            let mut items = vec![];
+            let mut selected = 0;
+            let mut group = "";
+            for (n, item) in MenuItem::ALL.into_iter().enumerate() {
+                if item.group() != group {
+                    group = item.group();
+                    items.push(ListItem::new(Span::styled(
+                        group,
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )));
+                }
+                if n == *index {
+                    selected = items.len();
+                }
+                items.push(ListItem::new(format!("  {}", item.label())));
+            }
             frame.render_stateful_widget(
                 List::new(items)
                     .highlight_style(highlight)
                     .highlight_symbol("› "),
                 chunks[0],
-                &mut ListState::default().with_selected(Some(*index)),
+                &mut ListState::default().with_selected(Some(selected)),
             );
         }
         Overlay::Accounts { index, chosen } => {
@@ -733,25 +905,40 @@ pub fn render_shell(
             );
             frame.render_widget(
                 Paragraph::new(input_line(editor, editor_areas[1].width as usize))
-                    .style(Style::default().fg(Color::Cyan)),
+                    .style(Style::default().fg(ACCENT)),
                 editor_areas[1],
             );
         }
-        Overlay::Settings { index, editors } => {
-            let items = editors.iter().enumerate().map(|(n, editor)| {
-                ListItem::new(vec![
-                    Line::from(settings_fields()[n]),
-                    Line::from(if n == *index {
+        Overlay::Settings {
+            index,
+            editors,
+            advanced,
+        } => {
+            let fields = SettingField::visible(*advanced);
+            let selected = fields
+                .iter()
+                .position(|field| *field as usize == *index)
+                .unwrap_or(0);
+            let items = fields.iter().map(|field| {
+                let n = *field as usize;
+                let editor = &editors[n];
+                let value = if field.choices().is_empty() {
+                    if n == *index {
                         input_line(editor, chunks[0].width as usize)
                     } else {
                         editor.text.clone()
-                    }),
-                ])
+                    }
+                } else if n == *index {
+                    format!("‹ {} ›", field.display(&editor.text))
+                } else {
+                    field.display(&editor.text)
+                };
+                ListItem::new(vec![Line::from(field.label()), Line::from(value)])
             });
             frame.render_stateful_widget(
                 List::new(items).highlight_style(highlight),
                 chunks[0],
-                &mut ListState::default().with_selected(Some(*index)),
+                &mut ListState::default().with_selected(Some(selected)),
             );
         }
         Overlay::Login { uri, code } => {
@@ -779,10 +966,50 @@ pub fn render_shell(
                 chunks[0],
             );
         }
-        Overlay::Help => {
-            frame.render_widget(Paragraph::new(
-                tf!("TwFarmer {}. Open the menu with m / F1.\n\nAccount names come from Twitch logins at sign-in.\n\nAccounts without personal channels use the shared list. Channel order sets priority.\n\nTemporary channels apply to all selected accounts until cleared or the program exits.\n\nAccount selection and settings are saved. Changes during farming apply automatically.\n\n↑/↓ or j/k: channel; Tab: account filter; PgUp/PgDn: scroll.\n\nCheck balances in the menu. Start farming to watch streams and claim bonuses.\n\nq / Ctrl+C to quit.", "TwFarmer {}. Откройте меню через m / F1.\n\nПри входе имя аккаунта определяется по логину Twitch.\n\nАккаунты без личного списка используют общие каналы. Порядок каналов задаёт приоритет.\n\nВременный список действует на все выбранные аккаунты до его очистки или выхода.\n\nВыбор аккаунтов и настройки сохраняются. Изменения во время фарма применяются автоматически.\n\n↑/↓ или j/k: канал; Tab: фильтр аккаунтов; PgUp/PgDn: прокрутка.\n\nПроверяйте балансы через меню. Запустите фарм для просмотра и сбора бонусов.\n\nq / Ctrl+C для выхода.", env!("CARGO_PKG_VERSION"))
-            ).wrap(Wrap{trim:false}),chunks[0]);
+        Overlay::Help(scroll) => {
+            let text = tf!(
+                r#"TwFarmer {}
+
+m/F1: menu. s: start. x: stop. a: login. c: shared channels.
+d: Drops. p: settings. l: log. q/Ctrl+C: quit.
+↑↓ or j/k: channel. Tab: account filter. PgUp/PgDn: page.
+
+Account names come from Twitch. Accounts without personal channels use the shared list.
+Temporary channels apply to all selected accounts until cleared or the program exits.
+Selection and settings are saved. Settings changes apply to running accounts.
+
+Settings: arrows/Space change choices. F2 shows technical fields. Enter saves, Esc cancels.
+Drops: Tab shows all rewards. Enter expands details. r refreshes.
+
+Points first uses configured online channels before automatic Drops. Drops first reserves one stream for Drops. At most two video streams and one Drops stream per account.
+Progress and rewards are reported by Twitch. Chat bot points are separate from Twitch channel points.
+
+Check balances in the menu to stop watching and read the latest state."#,
+                r#"TwFarmer {}
+
+m/F1: меню. s: старт. x: стоп. a: вход. c: общие каналы.
+d: Drops. p: настройки. l: журнал. q/Ctrl+C: выход.
+↑↓ или j/k: канал. Tab: фильтр аккаунтов. PgUp/PgDn: страница.
+
+Имена аккаунтов берутся из Twitch. Без личного списка используются общие каналы.
+Временные каналы действуют на выбранные аккаунты до очистки списка или выхода.
+Выбор и настройки сохраняются. Изменения применяются к работающим аккаунтам.
+
+Настройки: стрелки/пробел меняют варианты. F2 открывает технические поля. Enter сохраняет, Esc отменяет.
+Drops: Tab показывает все награды. Enter раскрывает подробности. r обновляет.
+
+Приоритет баллов выбирает настроенные онлайн-каналы перед автоматическими Drops. Приоритет Drops выделяет один поток для Drops. На аккаунт не более двух видеопотоков и одного потока Drops.
+Прогресс и награды приходят от Twitch. Баллы ботов отличаются от баллов каналов Twitch.
+
+Проверка балансов через меню останавливает просмотр и читает актуальное состояние."#,
+                env!("CARGO_PKG_VERSION")
+            );
+            frame.render_widget(
+                Paragraph::new(text)
+                    .wrap(Wrap { trim: false })
+                    .scroll((*scroll, 0)),
+                chunks[0],
+            );
         }
     }
 }
@@ -792,6 +1019,185 @@ mod tests {
     use super::*;
     use crate::model::{ChannelView, Event};
     use ratatui::backend::TestBackend;
+    use std::time::Duration;
+
+    #[test]
+    fn settings_choices_and_campaign_filters_show_actionable_content() {
+        use crate::drops::{CatalogEntry, Drop, DropStatus};
+        let config = Config::default();
+        let dashboard = Dashboard::new(vec![]);
+        let selected = HashSet::new();
+        let path = std::path::Path::new("twfarmer.toml");
+        let draw = |controls: &Controls, width, height| {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render_shell(
+                        frame,
+                        &dashboard,
+                        &mut ViewState::default(),
+                        &ShellView {
+                            controls,
+                            config: &config,
+                            profiles: &[],
+                            selected: &selected,
+                            temporary: &[],
+                            path,
+                        },
+                    )
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..height)
+                .map(|y| {
+                    (0..width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let mut controls = Controls::default();
+        controls.settings(&config);
+        for (width, height) in [(40, 12), (80, 30), (140, 32)] {
+            let text = draw(&controls, width, height);
+            assert!(text.contains("F2"));
+            assert!(text.contains(&format!(
+                "‹ {} ›",
+                SettingField::Priority.display(config.farming_priority.code())
+            )));
+            assert!(!text.contains("true/false"));
+        }
+        let entry = CatalogEntry {
+            drop: Drop {
+                campaign_id: "campaign".into(),
+                group_id: "group".into(),
+                campaign: "Campaign".into(),
+                reward: "Eligible reward".into(),
+                minutes: Some(5),
+                required: 30,
+                grants: None,
+                repeats: None,
+                status: DropStatus::Watching,
+            },
+            channels: vec!["channel".into()],
+            categories: vec![],
+            ends_at: chrono::Utc::now(),
+            link_url: None,
+        };
+        let mut blocked = entry.clone();
+        blocked.drop.reward = "Blocked reward".into();
+        blocked.drop.status = DropStatus::LinkRequired;
+        blocked.link_url = Some("https://example.com/link".into());
+        controls.overlay = Some(Overlay::Campaigns {
+            index: 0,
+            entries: vec![("user".into(), entry), ("user".into(), blocked)],
+            errors: vec![],
+            show_all: false,
+            expanded: false,
+            scroll: 0,
+        });
+        let text = draw(&controls, 100, 30);
+        assert!(text.contains("Eligible reward"));
+        assert!(!text.contains("Blocked reward"));
+        if let Some(Overlay::Campaigns {
+            show_all,
+            index,
+            expanded,
+            ..
+        }) = &mut controls.overlay
+        {
+            *show_all = true;
+            *index = 1;
+            *expanded = true;
+        }
+        let text = draw(&controls, 80, 30);
+        assert!(text.contains("Blocked reward"));
+        assert!(text.contains("https://example.com/link"));
+        if let Some(Overlay::Campaigns {
+            entries, expanded, ..
+        }) = &mut controls.overlay
+        {
+            entries.clear();
+            *expanded = false;
+        }
+        assert!(
+            draw(&controls, 80, 30).contains(tr!("No eligible rewards", "Нет доступных наград"))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn drops_progress_and_errors_render_at_narrow_and_wide_sizes() {
+        use crate::drops::{Drop, DropStatus};
+        for width in [80, 140] {
+            let mut model = Dashboard::new(vec![("account".into(), None, vec!["channel".into()])]);
+            let channel = &mut model.accounts[0].channels[0];
+            channel.drops_enabled = true;
+            channel.farm_role = crate::model::FarmRole::DropsAndPoints;
+            channel.drops_updated = Some(Instant::now() - Duration::from_secs(37));
+            channel.drops.push(Drop {
+                campaign_id: "campaign".into(),
+                group_id: "group".into(),
+                campaign: "GTAVI".into(),
+                reward: "GTA DVD Chest".into(),
+                minutes: Some(12),
+                required: 60,
+                grants: Some(3),
+                repeats: Some(6),
+                status: DropStatus::Watching,
+            });
+            let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+            let mut view = ViewState::default();
+            terminal
+                .draw(|frame| render(frame, &model, &mut view))
+                .unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>();
+            assert!(text.contains("12/60 min"));
+            assert!(text.contains("rewards 3/6"));
+            assert!(text.contains("GTA DVD Chest"));
+            assert!(text.contains("Farming: Drops + points"));
+            if width >= 110 {
+                assert!(text.contains("DROPS"));
+                assert!(text.contains("37s"), "Drops-only channel has no update age");
+                for (balance_age, expected) in [(90, "37s"), (8, "8s")] {
+                    model.accounts[0].channels[0].last_update =
+                        Some(Instant::now() - Duration::from_secs(balance_age));
+                    terminal
+                        .draw(|frame| render(frame, &model, &mut view))
+                        .unwrap();
+                    let text = terminal
+                        .backend()
+                        .buffer()
+                        .content
+                        .iter()
+                        .map(|c| c.symbol())
+                        .collect::<String>();
+                    assert!(
+                        text.contains(expected),
+                        "Latest points or Drops update is not shown"
+                    );
+                }
+            }
+            model.accounts[0].channels[0].drops_error = Some("request failed".into());
+            terminal
+                .draw(|frame| render(frame, &model, &mut view))
+                .unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>();
+            assert!(text.contains("Progress unavailable: request failed"));
+        }
+    }
 
     #[test]
     fn chat_state_and_errors_render_in_narrow_and_wide_terminals() {
@@ -886,15 +1292,25 @@ mod tests {
                     editor: crate::control::Editor::new("channel".into()),
                 },
                 Overlay::Settings {
-                    index: 7,
-                    editors: vec![crate::control::Editor::new("value".into()); 8],
+                    index: 11,
+                    editors: vec![crate::control::Editor::new("value".into()); 12],
+                    advanced: true,
                 },
+                Overlay::Campaigns {
+                    index: 1,
+                    entries: vec![],
+                    errors: vec!["Twitch connection failed".into()],
+                    show_all: false,
+                    expanded: false,
+                    scroll: 0,
+                },
+                Overlay::CampaignsLoading,
                 Overlay::Login {
                     uri: "https://www.twitch.tv/activate".into(),
                     code: "TESTCODE".into(),
                 },
                 Overlay::Loading,
-                Overlay::Help,
+                Overlay::Help(0),
             ] {
                 let editor = matches!(overlay, Overlay::Edit { .. });
                 controls.overlay = Some(overlay);

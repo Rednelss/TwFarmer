@@ -5,17 +5,29 @@ use crate::{
 };
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use futures_util::{StreamExt, stream};
 use regex::Regex;
 use reqwest::{Client, StatusCode, Url};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{path::PathBuf, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::LazyLock,
+    time::Duration,
+};
 use tokio::time::Instant;
 
 const GQL: &str = "https://gql.twitch.tv/gql";
 const POINTS_HASH: &str = "7fe050e3761eb2cf258d70ee1a21cbd76fa8cf3d7e7b12fc437e7029d446b5e3";
 const CLAIM_HASH: &str = "46aaeebe02c99afdf4fc97c7c0cba964124bf6b0af229395f1f6d1feed05b3d0";
 const PLAYBACK_HASH: &str = "ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9";
+static SETTINGS_URL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"https://(?:static\.twitchcdn\.net|assets\.twitch\.tv)/config/settings[^"<>\s]+\.js"#,
+    )
+    .expect("valid Twitch settings URL pattern")
+});
 
 pub fn http_client() -> Result<Client> {
     Client::builder()
@@ -50,6 +62,8 @@ pub struct Channel {
     pub login: String,
     pub id: String,
     pub broadcast_id: Option<String>,
+    pub game_id: Option<String>,
+    pub game_name: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -134,7 +148,7 @@ impl Twitch {
     pub async fn channel(&self, login: &str) -> Result<Channel> {
         let data = self.gql(json!({
             "operationName":"Channel",
-            "query":"query Channel($login: String!) { user(login: $login) { id login stream { id } } }",
+            "query":"query Channel($login: String!) { user(login: $login) { id login stream { id game { id name } } } }",
             "variables": { "login": login }
         })).await?;
         let user = data
@@ -156,7 +170,143 @@ impl Twitch {
             login: login.into(),
             id,
             broadcast_id,
+            game_id: user
+                .pointer("/stream/game/id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            game_name: user
+                .pointer("/stream/game/name")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         })
+    }
+
+    pub async fn drops(&self, channel: &Channel) -> Result<Vec<crate::drops::Drop>> {
+        let data = self
+            .gql(json!({
+                "operationName": "DropChannelCampaignsProgress",
+                "query": crate::drops::channel_query(),
+                "variables": {"channelID": channel.id}
+            }))
+            .await?;
+        crate::drops::parse(&data, &channel.id, channel.game_id.as_deref())
+    }
+
+    pub async fn available_drops(&self) -> Result<Vec<crate::drops::CatalogEntry>> {
+        let data = self
+            .gql(json!({"query": "query { dropsCampaigns(includeUpcoming: false) { id status } }"}))
+            .await?;
+        let campaigns = data.get("dropsCampaigns").context(tr!(
+            "Twitch did not return available campaigns",
+            "Twitch не вернул доступные кампании"
+        ))?;
+        let ids: Vec<String> = campaigns
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|c| c["status"].as_str() == Some("ACTIVE"))
+            .filter_map(|c| c["id"].as_str().map(str::to_string))
+            .collect();
+        // Catalog rows are public; details resolve the viewer's progress and account links.
+        let chunks: Vec<Vec<String>> = ids.chunks(10).map(|chunk| chunk.to_vec()).collect();
+        let results: Vec<Result<Vec<crate::drops::Campaign>>> = stream::iter(chunks)
+            .map(|ids| async move {
+                let data = self.gql(json!({"operationName": "AvailableDropsCampaigns", "query": crate::drops::details_query(&ids)})).await?;
+                let values: Vec<Value> = (0..ids.len()).filter_map(|i| data.get(format!("campaign_{i}")).filter(|c| !c.is_null()).cloned()).collect();
+                crate::drops::parse_campaigns(&json!(values))
+            }).buffered(3).collect().await;
+        let mut campaigns = vec![];
+        for result in results {
+            campaigns.extend(result?);
+        }
+        Ok(crate::drops::catalog(campaigns))
+    }
+
+    async fn directory(&self, game_id: Option<&str>) -> Result<Vec<String>> {
+        let query = if game_id.is_some() {
+            "query DropsDirectory($gameID: ID!) { game(id: $gameID) { streams(first: 100, options: {systemFilters: [DROPS_ENABLED]}) { edges { node { broadcaster { login } } } } } }"
+        } else {
+            "query DropsDirectory { streams(first: 100) { edges { node { broadcaster { login } } } } }"
+        };
+        let data = self.gql(json!({"operationName": "DropsDirectory", "query": query, "variables": {"gameID": game_id}})).await?;
+        let pointer = if game_id.is_some() {
+            "/game/streams/edges"
+        } else {
+            "/streams/edges"
+        };
+        Ok(data
+            .pointer(pointer)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|edge| {
+                edge.pointer("/node/broadcaster/login")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect())
+    }
+
+    pub async fn find_drop_channel(
+        &self,
+        catalog: &[crate::drops::CatalogEntry],
+        excluded: &HashSet<String>,
+    ) -> Result<Option<(Channel, Vec<crate::drops::Drop>)>> {
+        let mut directories: HashMap<Option<String>, Vec<String>> = HashMap::new();
+        let mut checked = HashSet::new();
+        for entry in catalog.iter().filter(|entry| entry.drop.pending()) {
+            let mut logins = entry.channels.clone();
+            if logins.is_empty() {
+                let categories: Vec<_> = if entry.categories.is_empty() {
+                    vec![None]
+                } else {
+                    entry.categories.iter().cloned().map(Some).collect()
+                };
+                for category in categories {
+                    if !directories.contains_key(&category) {
+                        directories
+                            .insert(category.clone(), self.directory(category.as_deref()).await?);
+                    }
+                    logins.extend(directories[&category].clone());
+                }
+            }
+            for login in logins {
+                if excluded.contains(&login) || !checked.insert(login.clone()) {
+                    continue;
+                }
+                let channel = self.channel(&login).await?;
+                if channel.broadcast_id.is_none() {
+                    continue;
+                }
+                let drops = self.drops(&channel).await?;
+                if drops.iter().any(|d| {
+                    d.pending()
+                        && catalog.iter().any(|e| {
+                            e.drop.pending()
+                                && d.campaign_id == e.drop.campaign_id
+                                && d.group_id == e.drop.group_id
+                        })
+                }) {
+                    return Ok(Some((channel, drops)));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn claim_drop(&self, drop: &crate::drops::Drop) -> Result<()> {
+        let id = drop.claim_id(&self.identity.user_id).context(tr!(
+            "The Drop is not ready to claim",
+            "Drop ещё нельзя забрать"
+        ))?;
+        let data = self
+            .persisted(
+                "DropsPage_ClaimDropRewards",
+                "a455deea71bdc9015b78eb49f4acfbce8baa7ccbedd28e549bb025bd0f751930",
+                json!({"input": {"dropInstanceID": id}}),
+            )
+            .await?;
+        crate::drops::confirm_claim(&data)
     }
 
     pub async fn points(&self, login: &str) -> Result<Option<Points>> {
@@ -230,10 +380,7 @@ impl Twitch {
             return Ok(url.clone());
         }
         let (_, html) = self.get_text(Url::parse("https://www.twitch.tv/")?).await?;
-        let re = Regex::new(
-            r#"https://(?:static\.twitchcdn\.net|assets\.twitch\.tv)/config/settings[^"<>\s]+\.js"#,
-        )?;
-        let settings = re
+        let settings = SETTINGS_URL
             .find(&html)
             .context(tr!(
                 "Twitch settings.js was not found; the internal API changed",
@@ -287,8 +434,29 @@ impl Twitch {
         })
     }
 
-    pub async fn watch(&mut self, channel: &Channel, playback: &Playback) -> Result<()> {
+    pub async fn watch(
+        &mut self,
+        channel: &Channel,
+        playback: &Playback,
+        farm_drops: bool,
+    ) -> Result<()> {
         let (base, playlist) = self.get_text(playback.playlist.clone()).await?;
+        if farm_drops {
+            // Drops count the playlist's segments, not only its latest segment.
+            for segment in hls::segments(&base, &playlist)? {
+                let response = self
+                    .client
+                    .head(segment)
+                    .send()
+                    .await
+                    .map_err(|e| e.without_url())
+                    .context(tr!("Drops stream segment", "Сегмент потока Drops"))?;
+                check_status(
+                    response.status(),
+                    tr!("Drops stream segment", "Сегмент потока Drops"),
+                )?;
+            }
+        }
         let segment = hls::latest_segment(&base, &playlist)?;
         let mut response = self
             .client

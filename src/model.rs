@@ -87,6 +87,12 @@ impl ChannelStatus {
 
 #[derive(Clone)]
 pub struct ChannelView {
+    pub farm_role: FarmRole,
+    pub automatic: bool,
+    pub drops: Vec<crate::drops::Drop>,
+    pub drops_enabled: bool,
+    pub drops_error: Option<String>,
+    pub drops_updated: Option<Instant>,
     pub chat_status: ChatStatus,
     pub chat_error: Option<String>,
     pub name: String,
@@ -103,6 +109,12 @@ pub struct ChannelView {
 impl ChannelView {
     pub fn new(name: String) -> Self {
         Self {
+            farm_role: FarmRole::None,
+            automatic: false,
+            drops: vec![],
+            drops_enabled: false,
+            drops_error: None,
+            drops_updated: None,
             chat_status: ChatStatus::Disabled,
             chat_error: None,
             name,
@@ -121,6 +133,28 @@ impl ChannelView {
             .zip(self.baseline)
             .map_or(0, |(now, initial)| now - initial)
     }
+    pub fn drops_label(&self) -> String {
+        if !self.drops_enabled {
+            return tr!("Off", "Выкл").into();
+        }
+        if self.drops_error.is_some() {
+            return tr!("Error", "Ошибка").into();
+        }
+        self.drops
+            .iter()
+            .find(|d| d.pending())
+            .or_else(|| self.drops.first())
+            .map_or_else(
+                || {
+                    if self.drops_updated.is_some() {
+                        tr!("No Drops", "Нет Drops").into()
+                    } else {
+                        tr!("Checking", "Проверка").into()
+                    }
+                },
+                |d| d.label(),
+            )
+    }
     pub fn set_balance(&mut self, balance: i64) {
         self.baseline.get_or_insert(balance);
         self.balance = Some(balance);
@@ -128,7 +162,28 @@ impl ChannelView {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FarmRole {
+    #[default]
+    None,
+    Points,
+    Drops,
+    DropsAndPoints,
+}
+impl FarmRole {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => tr!("Not selected", "Не выбран"),
+            Self::Points => tr!("Points", "Баллы"),
+            Self::Drops => "Drops",
+            Self::DropsAndPoints => tr!("Drops + points", "Drops + баллы"),
+        }
+    }
+}
+
 pub struct AccountView {
+    pub campaigns: Vec<crate::drops::CatalogEntry>,
+    pub campaigns_error: Option<String>,
     pub name: String,
     pub login: Option<String>,
     pub status: AccountStatus,
@@ -144,6 +199,15 @@ pub struct LogEntry {
 }
 
 pub enum Event {
+    Campaigns {
+        profile: String,
+        entries: Vec<crate::drops::CatalogEntry>,
+        error: Option<String>,
+    },
+    RemoveChannel {
+        profile: String,
+        name: String,
+    },
     Chat {
         profile: String,
         channel: String,
@@ -174,6 +238,19 @@ pub struct Reporter {
 }
 
 impl Reporter {
+    pub fn campaigns(&self, entries: &[crate::drops::CatalogEntry], error: Option<String>) {
+        let _ = self.sender.send(Event::Campaigns {
+            profile: self.profile.clone(),
+            entries: entries.to_vec(),
+            error,
+        });
+    }
+    pub fn remove_channel(&self, name: &str) {
+        let _ = self.sender.send(Event::RemoveChannel {
+            profile: self.profile.clone(),
+            name: name.into(),
+        });
+    }
     pub fn new(profile: String, sender: mpsc::UnboundedSender<Event>) -> Self {
         Self { profile, sender }
     }
@@ -220,6 +297,8 @@ impl Dashboard {
             accounts: profiles
                 .into_iter()
                 .map(|(name, login, channels)| AccountView {
+                    campaigns: vec![],
+                    campaigns_error: None,
                     name,
                     login,
                     status: AccountStatus::Connecting,
@@ -233,6 +312,21 @@ impl Dashboard {
     }
     pub fn apply(&mut self, event: Event) {
         match event {
+            Event::Campaigns {
+                profile,
+                entries,
+                error,
+            } => {
+                if let Some(account) = self.accounts.iter_mut().find(|a| a.name == profile) {
+                    account.campaigns = entries;
+                    account.campaigns_error = error;
+                }
+            }
+            Event::RemoveChannel { profile, name } => {
+                if let Some(account) = self.accounts.iter_mut().find(|a| a.name == profile) {
+                    account.channels.retain(|c| c.name != name || !c.automatic);
+                }
+            }
             Event::Chat {
                 profile,
                 channel,
@@ -267,6 +361,7 @@ impl Dashboard {
                     account.error = error;
                     if status == AccountStatus::Error {
                         for channel in &mut account.channels {
+                            channel.farm_role = FarmRole::None;
                             channel.status = ChannelStatus::Error;
                             channel.error = account.error.clone();
                             channel.chat_status = ChatStatus::Disabled;
@@ -276,12 +371,15 @@ impl Dashboard {
                 }
             }
             Event::Channel { profile, mut view } => {
-                if let Some(account) = self.accounts.iter_mut().find(|a| a.name == profile)
-                    && let Some(channel) = account.channels.iter_mut().find(|c| c.name == view.name)
-                {
-                    view.chat_status = channel.chat_status.clone();
-                    view.chat_error = channel.chat_error.clone();
-                    *channel = view;
+                if let Some(account) = self.accounts.iter_mut().find(|a| a.name == profile) {
+                    if let Some(channel) = account.channels.iter_mut().find(|c| c.name == view.name)
+                    {
+                        view.chat_status = channel.chat_status.clone();
+                        view.chat_error = channel.chat_error.clone();
+                        *channel = view;
+                    } else if view.automatic {
+                        account.channels.push(view);
+                    }
                 }
             }
             Event::Log {
@@ -341,6 +439,37 @@ pub fn duration_text(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discovered_channels_are_scoped_to_the_account_and_can_be_removed() {
+        let mut dashboard = Dashboard::new(vec![
+            ("one".into(), None, vec!["manual".into()]),
+            ("two".into(), None, vec![]),
+        ]);
+        let mut view = ChannelView::new("discovered".into());
+        view.automatic = true;
+        dashboard.apply(Event::Channel {
+            profile: "one".into(),
+            view,
+        });
+        assert_eq!(dashboard.accounts[0].channels.len(), 2);
+        assert!(dashboard.accounts[1].channels.is_empty());
+        dashboard.apply(Event::RemoveChannel {
+            profile: "two".into(),
+            name: "discovered".into(),
+        });
+        assert_eq!(dashboard.accounts[0].channels.len(), 2);
+        dashboard.apply(Event::RemoveChannel {
+            profile: "one".into(),
+            name: "manual".into(),
+        });
+        assert_eq!(dashboard.accounts[0].channels.len(), 2);
+        dashboard.apply(Event::RemoveChannel {
+            profile: "one".into(),
+            name: "discovered".into(),
+        });
+        assert_eq!(dashboard.accounts[0].channels.len(), 1);
+        assert_eq!(dashboard.accounts[0].channels[0].name, "manual");
+    }
     #[test]
     fn balances_preserve_independent_chat_state_and_accounts_remain_isolated() {
         let mut model = Dashboard::new(vec![

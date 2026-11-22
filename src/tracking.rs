@@ -13,6 +13,14 @@ pub fn minute_watched_payload(channel: &Channel, user_id: &str) -> Result<Value>
         "player":"site",
         "user_id":user_id,
         "live":true,
+        "is_live":true,
+        "logged_in":true,
+        "hidden":false,
+        "muted":false,
+        "minutes_logged":1,
+        "game":channel.game_name,
+        "game_id":channel.game_id,
+        "client_time":chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "channel":channel.login
     }}]))
 }
@@ -26,6 +34,8 @@ mod tests {
             login: "new_channel".into(),
             id: "456".into(),
             broadcast_id: Some("789".into()),
+            game_id: Some("321".into()),
+            game_name: Some("Game".into()),
         }
     }
 

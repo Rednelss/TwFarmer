@@ -6,6 +6,7 @@ mod auth;
 mod chat;
 mod config;
 mod control;
+mod drops;
 mod farmer;
 mod hls;
 mod local;
@@ -43,6 +44,11 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    #[command(about = tr!("List available Drops campaigns and account eligibility", "Показать доступные кампании Drops и условия аккаунта"))]
+    Drops {
+        #[arg(long = "account", value_delimiter = ',')]
+        accounts: Vec<String>,
+    },
     #[command(about = tr!("Show or save the language: en or ru", "Показать или сохранить язык: en или ru"))]
     Language {
         #[arg(value_enum)]
@@ -346,6 +352,42 @@ async fn execute(cli: Cli) -> Result<()> {
     }
     let terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
     match cli.command {
+        Some(Command::Drops { accounts }) => {
+            let (config, profiles) = prepared(&cli.config).await?;
+            let profiles = accounts::select(&profiles, &accounts)?;
+            let mut failed = false;
+            for profile in profiles {
+                let name = profile.name.clone();
+                match farmer::campaigns(profile, &config).await {
+                    Ok(entries) => {
+                        if entries.is_empty() {
+                            println!(
+                                "{}",
+                                tf!(
+                                    "[{name}] No active Drops campaigns.",
+                                    "[{name}] Нет активных кампаний Drops."
+                                )
+                            );
+                        }
+                        for entry in entries {
+                            println!("[{name}] {}", entry.detail());
+                        }
+                    }
+                    Err(error) => {
+                        failed = true;
+                        eprintln!("[{name}] {error:#}");
+                    }
+                }
+            }
+            ensure!(
+                !failed,
+                "{}",
+                tr!(
+                    "Could not check Drops for some accounts.",
+                    "Не удалось проверить Drops для части аккаунтов."
+                )
+            );
+        }
         Some(Command::Language { language }) => {
             let mut config = config_or_default(&cli.config)?;
             if let Some(language) = language {

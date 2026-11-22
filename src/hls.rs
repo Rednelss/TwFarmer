@@ -48,7 +48,7 @@ pub fn lowest_variant(base: &Url, playlist: &str) -> Result<Url> {
         ))
 }
 
-pub fn latest_segment(base: &Url, playlist: &str) -> Result<Url> {
+pub fn segments(base: &Url, playlist: &str) -> Result<Vec<Url>> {
     ensure!(
         playlist.trim_start().starts_with("#EXTM3U"),
         "{}",
@@ -57,18 +57,30 @@ pub fn latest_segment(base: &Url, playlist: &str) -> Result<Url> {
             "Ответ потока не является HLS-плейлистом"
         )
     );
-    let line = playlist
+    let segments: Vec<_> = playlist
         .lines()
         .map(str::trim)
-        .rfind(|line| !line.is_empty() && !line.starts_with('#'))
-        .context(tr!(
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            base.join(line).context(tr!(
+                "Invalid HLS segment URL",
+                "Неверный адрес сегмента HLS"
+            ))
+        })
+        .collect::<Result<_>>()?;
+    ensure!(
+        !segments.is_empty(),
+        "{}",
+        tr!(
             "No HLS segments; the stream may have ended",
             "В HLS нет сегментов; канал мог завершить эфир"
-        ))?;
-    base.join(line).context(tr!(
-        "Invalid HLS segment URL",
-        "Неверный адрес сегмента HLS"
-    ))
+        )
+    );
+    Ok(segments)
+}
+
+pub fn latest_segment(base: &Url, playlist: &str) -> Result<Url> {
+    Ok(segments(base, playlist)?.pop().unwrap())
 }
 
 #[cfg(test)]
@@ -90,6 +102,11 @@ mod tests {
         assert_eq!(
             latest_segment(&base, text).unwrap().as_str(),
             "https://example.test/live/new.ts?key=foo"
+        );
+        assert_eq!(segments(&base, text).unwrap().len(), 2);
+        assert_eq!(
+            segments(&base, text).unwrap()[0].as_str(),
+            "https://example.test/live/old.ts"
         );
         assert!(latest_segment(&base, "#EXTM3U\n").is_err());
         assert!(lowest_variant(&base, "<html>error</html>").is_err());

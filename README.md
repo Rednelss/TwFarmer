@@ -2,8 +2,8 @@
 
 **English** | [Русский](README.ru.md)
 
-A Rust terminal application for Twitch channel points farming and claiming
-available bonuses with multiple accounts. Accounts use their Twitch logins;
+A Rust terminal application for Twitch channel points, bonuses, and Drops
+with multiple accounts. Accounts use their Twitch logins;
 you do not need to invent separate profile names.
 
 ## Installation
@@ -74,12 +74,16 @@ Press `m` or `F1` to open the menu, `↑/↓` to select, `Enter` to apply, and
 - Edit shared channels, personal channels, or restore the shared list for an account.
 - Set temporary channels for the current process.
 - Edit farming settings, open a configuration, or create a new one.
+- Browse available Drops campaigns and the requirements for each reward.
 - Choose the language, switch between the table and log, view help, and quit.
 
 Channel forms accept Twitch logins or URLs separated by spaces or commas.
 An empty personal list uses the shared list. An empty temporary list restores
 saved lists. Forms support `←/→`, `Home/End`, `Backspace/Delete`, paste, and
-`Ctrl+U` to clear input. Use `Tab` or `↑/↓` between settings fields.
+`Ctrl+U` to clear input. In settings, `Tab` or `↑/↓` moves between fields;
+`←/→` or Space changes switches and choices. `Enter` saves; `Esc` discards edits.
+F2 shows or hides advanced fields: polling interval, watch interval, Twitch
+Client ID, and OAuth scopes. Hiding those fields preserves their values.
 
 Shared and personal channels, settings, and the account selection are saved.
 Temporary channels apply to all selected accounts in the current process and
@@ -90,6 +94,7 @@ Checking balances stops watching. Other accounts continue running during sign-in
 Dashboard shortcuts:
 
 - `s`: start; `x`: stop; `a`: add an account; `c`: shared channels.
+- `d`: Drops campaigns; `p`: farming settings; `?`: help.
 - `↑/↓` or `j/k`: select a channel; `Tab`: filter by account.
 - `PgUp/PgDn`: scroll; `l`: toggle the log.
 - `q` or `Ctrl+C`: quit.
@@ -97,12 +102,16 @@ Dashboard shortcuts:
 Channels are sorted by state: farming, starting, retrying, online, queued,
 checking, stopped, errors, points disabled, and offline. Within the same state,
 the configured order is preserved. Selection follows a channel when its row
-moves. Watching priority always follows configuration order.
+moves. Points channels follow configuration order; `farming_priority` determines
+whether points or Drops fill slots first.
 
 The dashboard updates every 250 ms and shows balances, balance changes for this
 process, bonuses, states, and errors. Wide terminals also show active time and
-the age of the balance. Channel details show the last successful watch request.
+the age of the latest balance or Drops update. Channel details show the last
+successful watch request.
 A successful stream request does not itself confirm that points were awarded.
+The plain log reports balance and reward changes rather than repeating unchanged
+values on every poll. The dashboard continues to show the latest state.
 
 Each account runs independently and watches up to two channels concurrently.
 Failure of one account does not stop the others. When a stream ends, the next
@@ -195,6 +204,10 @@ applications at https://www.twitch.tv/settings/connections.
 | Clear temporary channels | `start` without channels |
 | Settings | `settings show`, `settings set OPTIONS` |
 | Chat presence | `settings set --chat-presence true` or `false` |
+| Drops farming and claims | `settings set --farm-drops true --claim-drops true` |
+| Available Drops campaigns | `drops --account LOGIN` |
+| Automatic Drops channels | `settings set --auto-drops true` or `false` |
+| Points or Drops priority | `settings set --farming-priority points` or `drops` |
 | Open a configuration | `--config PATH ui` |
 | Create a configuration, including an empty one | `--config PATH init [CHANNELS]` |
 | Log instead of table | `ui --journal`, `run --journal`, `journal` |
@@ -221,7 +234,10 @@ Commands that change channels, settings, or the saved account selection apply
 those changes to the running program. Temporary lists and selections are not
 written to disk. `settings set` accepts `--max-channels`,
 `--poll-interval-seconds`, `--watch-interval-seconds`, `--claim-bonus true|false`,
-`--client-id`, `--chat-presence true|false`, `--language en|ru`, and `--oauth-scopes "user_read"`.
+`--client-id`, `--chat-presence true|false`, `--farm-drops true|false`,
+`--claim-drops true|false`, `--language en|ru`, and `--oauth-scopes "user_read"`.
+It also accepts `--auto-drops true|false` for automatic campaign and channel discovery.
+Use `--farming-priority points|drops` to choose which fills video slots first.
 An empty scopes string clears the list.
 
 The plain-log menu action releases the dashboard and disables keyboard control;
@@ -239,7 +255,8 @@ Start only already configured accounts and sessions:
 ```
 
 `daemon` never opens the interface or reads stdin. It requires an existing
-configuration, saved sessions, selected accounts, and configured channels.
+configuration, saved sessions, selected accounts, and configured channels
+(or enabled automatic Drops discovery).
 Missing setup produces an error in the log. It does not start device sign-in.
 Saved sessions are validated and refreshed as usual; run `login` separately
 if an account needs to sign in again.
@@ -291,11 +308,14 @@ See `twfarmer.example.toml`:
 - `channels`: shared channels, in priority order.
 - `[account_channels]`: personal lists, e.g. `twitch_user = ["welovegames"]`.
 - `enabled_accounts`: saved login selection; empty means none, absent means all.
-- `max_channels`: 1 or 2 per account.
+- `max_channels`: total video slots per account, 1 or 2, including Drops.
+- `farming_priority`: `points` (default) or `drops`.
 - `poll_interval_seconds`: balance polling, 30-3600 seconds; defaults to 60.
 - `watch_interval_seconds`: watch requests, 15-60 seconds; defaults to 20.
 - `claim_bonus`: automatically claim available bonuses.
 - `chat_presence`: join the configured channels' chats; defaults to `true`.
+- `farm_drops`, `claim_drops`: watch-based Drops and automatic claims; default to `true`.
+- `auto_drops`: automatically discover eligible campaigns and channels; defaults to `false`.
 - `client_id`, `oauth_scopes`: sign-in settings, defaulting to the public TV
   client ID and `user_read`. Changing the client ID requires signing in again.
 
@@ -320,6 +340,98 @@ Twitch decides whether to award points. On a new channel, the first points
 usually arrive after a few minutes. The official API does not support points
 farming; internal requests can change. Automated farming may conflict with
 Twitch's rules. Predictions and spending points are not implemented.
+
+## Drops
+
+Watch-based Drops are enabled by default. Add participating channels to the shared
+or personal list, then start farming as usual:
+
+```bash
+./twfarmer run whoplohoyparen --account YOUR_LOGIN
+./twfarmer settings set --farm-drops true --claim-drops true
+```
+
+The same switches appear in **Farming settings > Farm Drops / Claim Drops**.
+**Available Drops campaigns** lists rewards for selected accounts, their progress,
+eligibility, and blocking conditions. It initially shows eligible and claimable
+rewards. Tab switches to all campaigns, including blocked and completed rewards.
+Use `↑/↓` or `PgUp/PgDn` to select a reward and see its details below the list;
+Enter expands the details for scrolling and returns to the list. `r` refreshes
+and `Esc` closes the browser. Farming continues while it is open.
+The command `./twfarmer drops --account YOUR_LOGIN` reads the same data.
+The wide table has a DROPS column; channel details and the plain log show the
+campaign, reward, and minutes reported by Twitch. `status` also reads Drops
+without watching or claiming. Unknown progress appears as `?`, never as a local
+timer. Drops are polled at least once a minute while enabled.
+
+Drops use at most one video stream per account. `max_channels` is the total limit
+for points and Drops together. Channels with points disabled can still earn Drops.
+Chat presence continues on all configured channels.
+
+`farming_priority = "points"` is the default: eligible online channels from the
+shared or personal list fill slots in list order. If one slot remains, an eligible
+Drops channel can use it. With `farming_priority = "drops"`, one Drops stream is
+chosen first, and a configured points channel fills the other slot. If one stream
+can earn both, it occupies one slot and leaves room for another points channel.
+With `max_channels = 1`, only the higher-priority available type is selected.
+
+```bash
+./twfarmer settings set --farming-priority points
+./twfarmer settings set --farming-priority drops
+```
+
+The same choice is in **Farming settings > Farming priority**. Logs and
+channel details show each selected stream's role. Mixed viewing sends the points
+stream's requests before the Drops heartbeat; credited minutes and balances still
+come from Twitch. Watching two Drops campaigns on separate streams did not provide
+stable progress in both and is not scheduled.
+
+After the current stream has no eligible Drops, another campaign can be selected.
+The displayed minutes come from Twitch rather than a local timer.
+
+Claims require Twitch's `CLAIMABLE` status. A full minute counter alone does not
+confirm readiness. Repeated campaigns show the number of rewards and the next
+eligible time when Twitch provides it. GTAVI Launch Celebration, for example,
+requires an hour of viewing on different days for its daily rewards.
+
+Subscription rewards and rewards with extra prerequisites are not watch targets.
+Account linking and manual reward choices must be completed on Twitch. If a
+reward is a chest, its contents and opening behavior are controlled by Twitch.
+The program makes no purchases. Twitch decides whether viewing is credited;
+its internal Drops API may change.
+
+To find participating channels without entering their names, enable automatic discovery:
+
+```bash
+./twfarmer settings set --auto-drops true --farm-drops true
+./twfarmer run --account YOUR_LOGIN
+```
+
+The interface switch is **Farming settings > Find Drops channels automatically**.
+This mode can run with an empty channel list, including through `daemon`/systemd.
+Slot allocation follows the selected farming priority. When a Drops slot is
+available, the program finds one live channel from a campaign's allowed channels
+or categories. Category
+search checks up to 100 streams with Drops enabled and confirms eligibility on the
+channel before viewing. Discovered channels stay in memory and appear in the table;
+they do not change saved lists. Chat presence also covers the selected automatic channel.
+
+Each account refreshes the campaign catalog every five minutes while automatic
+Drops can use a slot. With points-first priority and all slots filled by configured
+points channels, the automatic scan is deferred until a slot becomes available.
+The `drops` command and campaign browser can still load the full catalog on demand.
+Finished rewards,
+daily pauses, and offline channels allow another eligible campaign to be selected.
+If no suitable stream is live, discovery retries on the next poll. Account-specific
+details determine linked game accounts and completed prerequisites; missing or
+blocked conditions are displayed rather than treated as eligible. Ready rewards can
+also be claimed directly from the catalog when `claim_drops` is enabled. Existing paid
+requirements can qualify a watch reward, but the program never buys subscriptions
+or links external accounts. Disable `auto_drops` to use only configured channels.
+
+If Twitch has already counted watch minutes, viewing can continue even when its
+account connection field is inconsistent. Claim attempts still require `CLAIMABLE`,
+and Twitch must confirm the claim; a connection flag alone does not confirm delivery.
 
 ## Development
 

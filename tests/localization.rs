@@ -33,6 +33,13 @@ fn english_default_and_russian_help_cover_nested_commands_and_errors() {
     );
     assert!(nested.status.success());
     assert!(stdout(&nested).contains("Сохранённый язык"));
+    assert!(stdout(&nested).contains("Забирать Drops"));
+    assert!(stdout(&nested).contains("--farm-drops"));
+    assert!(stdout(&nested).contains("--auto-drops"));
+    assert!(stdout(&nested).contains("--farming-priority"));
+    let drops = run(directory.path(), &["--lang", "ru", "drops", "--help"]);
+    assert!(drops.status.success());
+    assert!(stdout(&drops).contains("доступные кампании Drops"));
     let invalid = run(directory.path(), &["--lang", "ru", "language", "fr"]);
     assert_eq!(invalid.status.code(), Some(2));
     let error = String::from_utf8_lossy(&invalid.stderr);
@@ -65,6 +72,14 @@ fn language_persists_and_flag_overrides_without_rewriting_saved_settings() {
             "en",
             "--chat-presence",
             "false",
+            "--farm-drops",
+            "false",
+            "--claim-drops",
+            "false",
+            "--auto-drops",
+            "true",
+            "--farming-priority",
+            "drops",
         ],
     );
     assert!(changed.status.success());
@@ -72,6 +87,10 @@ fn language_persists_and_flag_overrides_without_rewriting_saved_settings() {
     let settings: toml::Value = std::fs::read_to_string(&config).unwrap().parse().unwrap();
     assert_eq!(settings["language"].as_str(), Some("en"));
     assert_eq!(settings["chat_presence"].as_bool(), Some(false));
+    assert_eq!(settings["farm_drops"].as_bool(), Some(false));
+    assert_eq!(settings["claim_drops"].as_bool(), Some(false));
+    assert_eq!(settings["auto_drops"].as_bool(), Some(true));
+    assert_eq!(settings["farming_priority"].as_str(), Some("drops"));
     assert_eq!(settings["channels"][0].as_str(), Some("welovegames"));
 }
 

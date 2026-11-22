@@ -23,6 +23,9 @@ use tokio::{
 };
 
 enum Job {
+    Campaigns {
+        results: Vec<(String, Result<Vec<crate::drops::CatalogEntry>>)>,
+    },
     Loaded {
         path: PathBuf,
         result: Result<(Config, Vec<Profile>)>,
@@ -204,6 +207,7 @@ impl App {
                 account.status = AccountStatus::Idle;
             }
             for channel in &mut account.channels {
+                channel.farm_role = crate::model::FarmRole::None;
                 channel.chat_status = crate::model::ChatStatus::Disabled;
                 channel.chat_error = None;
                 if matches!(
@@ -245,9 +249,10 @@ impl App {
         let config = self.runtime_config()?;
         if !status_only {
             ensure!(
-                profiles
-                    .iter()
-                    .any(|p| !config.channels_for(&p.config_key).is_empty()),
+                config.automatic_drops()
+                    || profiles
+                        .iter()
+                        .any(|p| !config.channels_for(&p.config_key).is_empty()),
                 "{}",
                 tf!(
                     "The channel list is empty. Set shared or personal channels in the menu.",
@@ -402,6 +407,37 @@ impl App {
     async fn action(&mut self, action: Action) -> Result<bool> {
         let save_selection = matches!(&action, Action::SaveSelection(_));
         match action {
+            Action::Campaigns => {
+                let profiles: Vec<_> = self
+                    .profiles
+                    .iter()
+                    .filter(|p| self.selected.contains(&p.name))
+                    .cloned()
+                    .collect();
+                ensure!(
+                    !profiles.is_empty(),
+                    "{}",
+                    tr!(
+                        "Select at least one account first.",
+                        "Сначала выберите хотя бы один аккаунт."
+                    )
+                );
+                self.jobs.abort_all();
+                self.generation += 1;
+                let generation = self.generation;
+                let config = self.config.clone();
+                self.controls.overlay = Some(Overlay::CampaignsLoading);
+                self.jobs.spawn(async move {
+                    let mut results = vec![];
+                    for profile in profiles {
+                        results.push((
+                            profile.name.clone(),
+                            farmer::campaigns(profile, &config).await,
+                        ));
+                    }
+                    (generation, Job::Campaigns { results })
+                });
+            }
             Action::SetLanguage(language) => {
                 let mut next = self.config.clone();
                 next.language = language;
@@ -543,6 +579,31 @@ impl App {
 
     async fn job(&mut self, job: Job) -> Result<()> {
         match job {
+            Job::Campaigns { results } => {
+                let mut rows = vec![];
+                let mut errors = vec![];
+                for (name, result) in results {
+                    match result {
+                        Ok(entries) => {
+                            rows.extend(entries.iter().cloned().map(|entry| (name.clone(), entry)));
+                            self.apply(Event::Campaigns {
+                                profile: name,
+                                entries,
+                                error: None,
+                            });
+                        }
+                        Err(error) => errors.push(format!("[{name}] {error:#}")),
+                    }
+                }
+                self.controls.overlay = Some(Overlay::Campaigns {
+                    index: 0,
+                    entries: rows,
+                    errors,
+                    show_all: false,
+                    expanded: false,
+                    scroll: 0,
+                });
+            }
             Job::Loaded {
                 path,
                 result,
@@ -1055,6 +1116,12 @@ mod tests {
             "false".into(),
             app.config.client_id.clone(),
             "user_read".into(),
+            "en".into(),
+            "true".into(),
+            "false".into(),
+            "false".into(),
+            "true".into(),
+            "drops".into(),
         ];
         app.action(Action::SaveSettings(values)).await.unwrap();
         cli(
@@ -1068,6 +1135,14 @@ mod tests {
                 "90",
                 "--claim-bonus",
                 "false",
+                "--farm-drops",
+                "false",
+                "--claim-drops",
+                "false",
+                "--auto-drops",
+                "true",
+                "--farming-priority",
+                "drops",
             ],
         )
         .await;

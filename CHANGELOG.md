@@ -2,6 +2,30 @@
 
 **English** | [Русский](CHANGELOG.ru.md)
 
+## 0.2.0 (2026-11-22)
+
+- `UPDATED` includes Drops polling for channels without a channel-points balance.
+- Watch-based Drops, including daily rewards, server-reported progress, and
+  automatic claims confirmed by Twitch.
+- Available campaigns in the interface and `drops` command, with account-specific
+  eligibility checks. Optional `auto_drops` finds participating live channels.
+- Points-first farming by default, configurable Drops-first priority, and mixed
+  points/Drops viewing within the total limit of 1-2 streams per account.
+  At most one stream is selected for Drops; a stream earning both uses one slot.
+- Grouped menu, keyboard switches for basic settings, advanced fields under F2,
+  and shortcuts for Drops, settings, and help.
+- Higher-contrast channel states and log timestamps; scrollable help and reward details.
+- Drops browser filters eligible rewards by default; Tab shows all campaigns,
+  including blocked and completed rewards, with details for the selected reward.
+- Fewer catalog copies and repeated log entries. Points-first farming defers
+  automatic campaign scans while configured points channels fill every slot.
+- Changing the automatic channel keeps configured chats connected. Shared claim
+  handling and smaller API models remove duplicated work and unused fields.
+
+Existing configuration and sessions remain compatible. Subscription rewards,
+account linking, and manual reward choices remain on Twitch. Twitch controls
+credited minutes and rewards; concurrent Drops campaigns are not scheduled.
+
 ## 0.1.1 (2026-11-22)
 
 - Join Twitch chat for all configured channels, with TLS, keepalive,

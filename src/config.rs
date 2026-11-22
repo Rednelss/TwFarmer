@@ -6,21 +6,52 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum FarmingPriority {
+    #[default]
+    Points,
+    Drops,
+}
+
+impl FarmingPriority {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Points => "points",
+            Self::Drops => "drops",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Points => tr!("channel points", "баллы каналов"),
+            Self::Drops => "Drops",
+        }
+    }
+}
+
 #[derive(clap::Args, Default)]
 pub struct SettingsPatch {
+    #[arg(long, value_enum, help = tr!("Fill video slots with points or Drops first", "В первую очередь занимать видеослоты баллами или Drops"))]
+    pub farming_priority: Option<FarmingPriority>,
+    #[arg(long, value_parser=clap::value_parser!(bool), help = tr!("Find eligible Drops campaigns and channels automatically", "Автоматически искать доступные кампании Drops и каналы"))]
+    pub auto_drops: Option<bool>,
+    #[arg(long, value_parser=clap::value_parser!(bool), help = tr!("Farm watch-based Drops on configured channels", "Фармить Drops за просмотр настроенных каналов"))]
+    pub farm_drops: Option<bool>,
+    #[arg(long, value_parser=clap::value_parser!(bool), help = tr!("Claim Drops when Twitch reports they are ready", "Забирать Drops, когда Twitch сообщает о готовности"))]
+    pub claim_drops: Option<bool>,
     #[arg(long, value_parser=clap::value_parser!(bool), help = tr!("Join Twitch chat for the configured channels", "Присутствовать в чате настроенных каналов Twitch"))]
     pub chat_presence: Option<bool>,
     #[arg(long, value_enum, help = tr!("Saved interface and log language: en or ru", "Сохранённый язык интерфейса и журнала: en или ru"))]
     pub language: Option<crate::i18n::Language>,
-    #[arg(long)]
+    #[arg(long, help = tr!("Total video streams per account (1-2), including at most one Drops stream", "Всего видеопотоков на аккаунт (1-2), в том числе не более одного для Drops"))]
     pub max_channels: Option<usize>,
-    #[arg(long)]
+    #[arg(long, help = tr!("Balance polling interval in seconds (30-3600)", "Интервал опроса балансов в секундах (30-3600)"))]
     pub poll_interval_seconds: Option<u64>,
-    #[arg(long)]
+    #[arg(long, help = tr!("Watch request interval in seconds (15-60)", "Интервал запросов просмотра в секундах (15-60)"))]
     pub watch_interval_seconds: Option<u64>,
-    #[arg(long, value_parser=clap::value_parser!(bool))]
+    #[arg(long, value_parser=clap::value_parser!(bool), help = tr!("Claim available channel point bonuses automatically", "Автоматически забирать доступные бонусы баллов канала"))]
     pub claim_bonus: Option<bool>,
-    #[arg(long)]
+    #[arg(long, help = tr!("Twitch OAuth client ID; changing it requires signing in again", "ID клиента OAuth Twitch; после изменения нужен повторный вход"))]
     pub client_id: Option<String>,
     #[arg(
         long,
@@ -31,6 +62,18 @@ pub struct SettingsPatch {
 impl SettingsPatch {
     pub fn apply(self, config: &Config) -> Result<Config> {
         let mut next = config.clone();
+        if let Some(value) = self.farming_priority {
+            next.farming_priority = value;
+        }
+        if let Some(value) = self.auto_drops {
+            next.auto_drops = value;
+        }
+        if let Some(value) = self.farm_drops {
+            next.farm_drops = value;
+        }
+        if let Some(value) = self.claim_drops {
+            next.claim_drops = value;
+        }
         if let Some(value) = self.chat_presence {
             next.chat_presence = value;
         }
@@ -69,6 +112,10 @@ pub const CLIENT_ID: &str = "ue6666qo983tsx6so1t0vnawi233wa";
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    pub farming_priority: FarmingPriority,
+    pub auto_drops: bool,
+    pub farm_drops: bool,
+    pub claim_drops: bool,
     pub chat_presence: bool,
     pub language: crate::i18n::Language,
     pub channels: Vec<String>,
@@ -86,6 +133,10 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            farming_priority: FarmingPriority::Points,
+            auto_drops: false,
+            farm_drops: true,
+            claim_drops: true,
             chat_presence: true,
             language: crate::i18n::Language::En,
             channels: vec![],
@@ -102,6 +153,9 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn automatic_drops(&self) -> bool {
+        self.farm_drops && self.auto_drops
+    }
     pub fn read(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path).with_context(|| {
             tf!(
