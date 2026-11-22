@@ -1,6 +1,7 @@
 use crate::{
     accounts::Profile,
     auth::SessionExpired,
+    chat,
     config::Config,
     model::{AccountStatus, ChannelStatus, ChannelView, Reporter},
     twitch::{Channel, Playback, Points, Twitch},
@@ -13,6 +14,7 @@ use std::{
     time::Duration,
 };
 use tokio::time::{Instant, MissedTickBehavior, interval};
+use tokio::{sync::watch, task::JoinSet};
 
 pub type ActiveUsers = Arc<Mutex<HashMap<String, String>>>;
 
@@ -94,6 +96,15 @@ pub async fn run(
         ),
         false,
     );
+    let (chat_credentials, changes) = watch::channel(chat::Credentials::new(
+        twitch.identity.login.clone(),
+        twitch.auth.access_token.clone(),
+    ));
+    // Dropping the account worker also aborts its chat task.
+    let mut chat_tasks = JoinSet::new();
+    if config.chat_presence {
+        chat_tasks.spawn(chat::run(channels.clone(), changes, reporter.clone()));
+    }
     let mut states: HashMap<String, State> = channels
         .iter()
         .map(|name| (name.clone(), State::new(name.clone())))
@@ -107,7 +118,21 @@ pub async fn run(
         ticker.tick().await;
         if Instant::now() >= next_validation {
             match twitch.validate().await {
-                Ok(()) => next_validation = Instant::now() + Duration::from_secs(300),
+                Ok(()) => {
+                    let current = chat::Credentials::new(
+                        twitch.identity.login.clone(),
+                        twitch.auth.access_token.clone(),
+                    );
+                    chat_credentials.send_if_modified(|previous| {
+                        if *previous == current {
+                            false
+                        } else {
+                            *previous = current;
+                            true
+                        }
+                    });
+                    next_validation = Instant::now() + Duration::from_secs(300);
+                }
                 Err(error) if error.is::<SessionExpired>() => return Err(error),
                 Err(error) => {
                     reporter.log(
@@ -225,6 +250,10 @@ pub async fn run(
             }
             if expired {
                 twitch.validate().await?;
+                chat_credentials.send_replace(chat::Credentials::new(
+                    twitch.identity.login.clone(),
+                    twitch.auth.access_token.clone(),
+                ));
                 selected.clear();
                 next_poll = Instant::now();
                 next_validation = Instant::now() + Duration::from_secs(300);

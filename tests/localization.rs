@@ -56,11 +56,22 @@ fn language_persists_and_flag_overrides_without_rewriting_saved_settings() {
     assert!(stdout(&run(directory.path(), &["--help"])).contains("Команды:"));
     assert!(stdout(&run(directory.path(), &["--lang=en", "--help"])).contains("Commands:"));
     assert_eq!(std::fs::read(&config).unwrap(), saved);
-    let changed = run(directory.path(), &["settings", "set", "--language", "en"]);
+    let changed = run(
+        directory.path(),
+        &[
+            "settings",
+            "set",
+            "--language",
+            "en",
+            "--chat-presence",
+            "false",
+        ],
+    );
     assert!(changed.status.success());
     assert!(stdout(&changed).contains("Settings saved."));
     let settings: toml::Value = std::fs::read_to_string(&config).unwrap().parse().unwrap();
     assert_eq!(settings["language"].as_str(), Some("en"));
+    assert_eq!(settings["chat_presence"].as_bool(), Some(false));
     assert_eq!(settings["channels"][0].as_str(), Some("welovegames"));
 }
 

@@ -10,6 +10,32 @@ pub enum AccountStatus {
     Error,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum ChatStatus {
+    #[default]
+    Disabled,
+    Connecting,
+    Joined,
+    Retry(Instant),
+    Error,
+}
+
+impl ChatStatus {
+    pub fn label(&self) -> String {
+        match self {
+            Self::Disabled => tr!("Off", "Выкл").into(),
+            Self::Connecting => tr!("Connecting", "Подключение").into(),
+            Self::Joined => tr!("Joined", "Подключён").into(),
+            Self::Error => tr!("Error", "Ошибка").into(),
+            Self::Retry(at) => tf!(
+                "Retry {}s",
+                "Повтор {}с",
+                at.saturating_duration_since(Instant::now()).as_secs()
+            ),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChannelStatus {
     Online,
@@ -61,6 +87,8 @@ impl ChannelStatus {
 
 #[derive(Clone)]
 pub struct ChannelView {
+    pub chat_status: ChatStatus,
+    pub chat_error: Option<String>,
     pub name: String,
     pub status: ChannelStatus,
     pub balance: Option<i64>,
@@ -75,6 +103,8 @@ pub struct ChannelView {
 impl ChannelView {
     pub fn new(name: String) -> Self {
         Self {
+            chat_status: ChatStatus::Disabled,
+            chat_error: None,
             name,
             status: ChannelStatus::Checking,
             balance: None,
@@ -114,6 +144,12 @@ pub struct LogEntry {
 }
 
 pub enum Event {
+    Chat {
+        profile: String,
+        channel: String,
+        status: ChatStatus,
+        error: Option<String>,
+    },
     Account {
         profile: String,
         login: Option<String>,
@@ -155,6 +191,14 @@ impl Reporter {
             view: view.clone(),
         });
     }
+    pub fn chat(&self, channel: &str, status: ChatStatus, error: Option<String>) {
+        let _ = self.sender.send(Event::Chat {
+            profile: self.profile.clone(),
+            channel: channel.into(),
+            status,
+            error,
+        });
+    }
     pub fn log(&self, message: impl Into<String>, error: bool) {
         let _ = self.sender.send(Event::Log {
             profile: self.profile.clone(),
@@ -189,6 +233,26 @@ impl Dashboard {
     }
     pub fn apply(&mut self, event: Event) {
         match event {
+            Event::Chat {
+                profile,
+                channel,
+                status,
+                error,
+            } => {
+                if let Some(account) = self
+                    .accounts
+                    .iter_mut()
+                    .find(|account| account.name == profile)
+                    && !matches!(account.status, AccountStatus::Idle | AccountStatus::Error)
+                    && let Some(view) = account
+                        .channels
+                        .iter_mut()
+                        .find(|view| view.name == channel)
+                {
+                    view.chat_status = status;
+                    view.chat_error = error;
+                }
+            }
             Event::Account {
                 profile,
                 login,
@@ -205,14 +269,18 @@ impl Dashboard {
                         for channel in &mut account.channels {
                             channel.status = ChannelStatus::Error;
                             channel.error = account.error.clone();
+                            channel.chat_status = ChatStatus::Disabled;
+                            channel.chat_error = None;
                         }
                     }
                 }
             }
-            Event::Channel { profile, view } => {
+            Event::Channel { profile, mut view } => {
                 if let Some(account) = self.accounts.iter_mut().find(|a| a.name == profile)
                     && let Some(channel) = account.channels.iter_mut().find(|c| c.name == view.name)
                 {
+                    view.chat_status = channel.chat_status.clone();
+                    view.chat_error = channel.chat_error.clone();
                     *channel = view;
                 }
             }
@@ -273,6 +341,44 @@ pub fn duration_text(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn balances_preserve_independent_chat_state_and_accounts_remain_isolated() {
+        let mut model = Dashboard::new(vec![
+            ("one".into(), None, vec!["channel".into()]),
+            ("two".into(), None, vec!["channel".into()]),
+        ]);
+        model.apply(Event::Chat {
+            profile: "one".into(),
+            channel: "channel".into(),
+            status: ChatStatus::Joined,
+            error: None,
+        });
+        let mut balance = ChannelView::new("channel".into());
+        balance.set_balance(100);
+        model.apply(Event::Channel {
+            profile: "one".into(),
+            view: balance,
+        });
+        assert_eq!(
+            model.accounts[0].channels[0].chat_status,
+            ChatStatus::Joined
+        );
+        assert_eq!(model.accounts[0].channels[0].balance, Some(100));
+        assert_eq!(
+            model.accounts[1].channels[0].chat_status,
+            ChatStatus::Disabled
+        );
+        model.apply(Event::Account {
+            profile: "one".into(),
+            login: None,
+            status: AccountStatus::Error,
+            error: Some("session expired".into()),
+        });
+        assert_eq!(
+            model.accounts[0].channels[0].chat_status,
+            ChatStatus::Disabled
+        );
+    }
     #[test]
     fn rows_group_states_globally_and_preserve_priority_within_each_state() {
         let mut dashboard = Dashboard::new(vec![

@@ -61,6 +61,7 @@ pub fn settings_fields() -> Vec<&'static str> {
             "OAuth scopes через пробел"
         ),
         tr!("Language (en/ru)", "Язык (en/ru)"),
+        tr!("Join chat (true/false)", "Присутствие в чате (true/false)"),
     ]
 }
 
@@ -281,6 +282,7 @@ impl Controls {
                                     config.client_id.clone(),
                                     config.oauth_scopes.join(" "),
                                     config.language.code().to_string(),
+                                    config.chat_presence.to_string(),
                                 ]
                                 .into_iter()
                                 .map(Editor::new)
@@ -401,11 +403,19 @@ impl Controls {
 pub fn settings(config: &Config, values: &[String]) -> anyhow::Result<Config> {
     use anyhow::{Context, ensure};
     ensure!(
-        matches!(values.len(), 6 | 7),
+        matches!(values.len(), 6..=8),
         "{}",
         tf!("Missing settings fields", "Не хватает полей настроек")
     );
     crate::config::SettingsPatch {
+        chat_presence: values
+            .get(7)
+            .map(|value| value.trim().parse())
+            .transpose()
+            .context(tr!(
+                "Use true or false for chat presence",
+                "Для присутствия в чате укажите true или false"
+            ))?,
         language: values
             .get(6)
             .map(|value| value.parse())
@@ -448,6 +458,26 @@ pub fn config_path(text: &str) -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn chat_presence_is_editable_and_invalid_boolean_is_rejected() {
+        let config = Config::default();
+        let values = [
+            "2",
+            "60",
+            "20",
+            "true",
+            crate::config::CLIENT_ID,
+            "user_read",
+            "en",
+            "false",
+        ]
+        .map(str::to_string);
+        assert!(!settings(&config, &values).unwrap().chat_presence);
+        assert!(config.chat_presence);
+        let mut invalid = values;
+        invalid[7] = "maybe".into();
+        assert!(settings(&config, &invalid).is_err());
+    }
     use crossterm::event::KeyModifiers;
     #[test]
     fn editing_handles_unicode_cursor_and_pasted_newlines() {

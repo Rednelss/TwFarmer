@@ -8,6 +8,8 @@ use std::{
 
 #[derive(clap::Args, Default)]
 pub struct SettingsPatch {
+    #[arg(long, value_parser=clap::value_parser!(bool), help = tr!("Join Twitch chat for the configured channels", "Присутствовать в чате настроенных каналов Twitch"))]
+    pub chat_presence: Option<bool>,
     #[arg(long, value_enum, help = tr!("Saved interface and log language: en or ru", "Сохранённый язык интерфейса и журнала: en или ru"))]
     pub language: Option<crate::i18n::Language>,
     #[arg(long)]
@@ -29,6 +31,9 @@ pub struct SettingsPatch {
 impl SettingsPatch {
     pub fn apply(self, config: &Config) -> Result<Config> {
         let mut next = config.clone();
+        if let Some(value) = self.chat_presence {
+            next.chat_presence = value;
+        }
         if let Some(language) = self.language {
             next.language = language;
         }
@@ -64,6 +69,7 @@ pub const CLIENT_ID: &str = "ue6666qo983tsx6so1t0vnawi233wa";
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    pub chat_presence: bool,
     pub language: crate::i18n::Language,
     pub channels: Vec<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -80,6 +86,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            chat_presence: true,
             language: crate::i18n::Language::En,
             channels: vec![],
             account_channels: BTreeMap::new(),

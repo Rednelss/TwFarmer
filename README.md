@@ -108,6 +108,34 @@ Each account runs independently and watches up to two channels concurrently.
 Failure of one account does not stop the others. When a stream ends, the next
 eligible online channel is selected in priority order.
 
+## Chat presence
+
+During farming, each account joins Twitch chat for every channel in its current
+shared, personal, or temporary list, including offline channels. The connection
+uses TLS on `irc.chat.twitch.tv:6697`, answers keepalive requests, reconnects
+after failures, and uses updated credentials when a session refreshes.
+Chat runs independently of the video watch requests.
+
+`chat_presence` is enabled by default. Change it in **Farming settings > Join chat**
+or with a command:
+
+```bash
+./twfarmer settings set --chat-presence true
+./twfarmer settings set --chat-presence false
+```
+
+Channel details show chat state and errors. Terminals at least 130 columns wide
+also show a `CHAT` column. Stopping farming, checking balances, or exiting closes
+the chat connection. The program sends no chat messages and does not store or
+print incoming messages.
+
+StreamElements and similar bots maintain their own loyalty balances. Whether
+chat presence earns those points depends on the broadcaster's bot settings;
+some rules require activity or a live stream. The dashboard balance is still
+Twitch channel points. Twitch's users-in-chat list may take time to update.
+If Twitch rejects IRC login, renew the account's sign-in. Tokens from some
+OAuth clients require `chat:read` in `oauth_scopes` for IRC access.
+
 ## Commands
 
 Commands support scripts and use Twitch logins as account names:
@@ -166,6 +194,7 @@ applications at https://www.twitch.tv/settings/connections.
 | Temporary channels | `run CHANNELS` or `start CHANNELS` |
 | Clear temporary channels | `start` without channels |
 | Settings | `settings show`, `settings set OPTIONS` |
+| Chat presence | `settings set --chat-presence true` or `false` |
 | Open a configuration | `--config PATH ui` |
 | Create a configuration, including an empty one | `--config PATH init [CHANNELS]` |
 | Log instead of table | `ui --journal`, `run --journal`, `journal` |
@@ -192,7 +221,7 @@ Commands that change channels, settings, or the saved account selection apply
 those changes to the running program. Temporary lists and selections are not
 written to disk. `settings set` accepts `--max-channels`,
 `--poll-interval-seconds`, `--watch-interval-seconds`, `--claim-bonus true|false`,
-`--client-id`, `--language en|ru`, and `--oauth-scopes "user_read"`.
+`--client-id`, `--chat-presence true|false`, `--language en|ru`, and `--oauth-scopes "user_read"`.
 An empty scopes string clears the list.
 
 The plain-log menu action releases the dashboard and disables keyboard control;
@@ -266,6 +295,7 @@ See `twfarmer.example.toml`:
 - `poll_interval_seconds`: balance polling, 30-3600 seconds; defaults to 60.
 - `watch_interval_seconds`: watch requests, 15-60 seconds; defaults to 20.
 - `claim_bonus`: automatically claim available bonuses.
+- `chat_presence`: join the configured channels' chats; defaults to `true`.
 - `client_id`, `oauth_scopes`: sign-in settings, defaulting to the public TV
   client ID and `user_read`. Changing the client ID requires signing in again.
 

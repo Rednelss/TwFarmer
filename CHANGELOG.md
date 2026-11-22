@@ -2,6 +2,18 @@
 
 **English** | [Русский](CHANGELOG.ru.md)
 
+## 0.1.1 (2026-11-22)
+
+- Join Twitch chat for all configured channels, with TLS, keepalive,
+  reconnection, and refreshed credentials.
+- Chat state and errors in the dashboard; a `chat_presence` setting available
+  through both the interface and commands.
+- A rejected channel does not disconnect other chats. Stopping farming or
+  checking balances closes the chat connection.
+
+Bot loyalty points depend on the broadcaster's settings. Chat presence is
+enabled by default; the dashboard balance remains Twitch channel points.
+
 ## 0.1.0 (2026-11-19)
 
 First public release of TwFarmer.

@@ -204,6 +204,8 @@ impl App {
                 account.status = AccountStatus::Idle;
             }
             for channel in &mut account.channels {
+                channel.chat_status = crate::model::ChatStatus::Disabled;
+                channel.chat_error = None;
                 if matches!(
                     channel.status,
                     ChannelStatus::Watching

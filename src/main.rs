@@ -3,6 +3,7 @@ mod i18n;
 mod accounts;
 mod app;
 mod auth;
+mod chat;
 mod config;
 mod control;
 mod farmer;

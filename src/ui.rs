@@ -2,7 +2,7 @@ use crate::{
     accounts::Profile,
     config::Config,
     control::{Controls, EditTarget, Overlay, menu_items, settings_fields},
-    model::{AccountStatus, ChannelStatus, Dashboard, duration_text},
+    model::{AccountStatus, ChannelStatus, ChatStatus, Dashboard, duration_text},
 };
 use anyhow::{Context, Result};
 use crossterm::{
@@ -169,7 +169,13 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
             Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Min(3),
-            Constraint::Length(if area.height >= 20 { 4 } else { 3 }),
+            Constraint::Length(if area.height >= 24 {
+                6
+            } else if area.height >= 20 {
+                5
+            } else {
+                3
+            }),
             Constraint::Length(log_height),
             Constraint::Length(1),
         ])
@@ -238,7 +244,8 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
     );
     let wide = area.width >= 110;
     let medium = area.width >= 80;
-    let headers = if wide {
+    let chat_column = area.width >= 130;
+    let mut headers = if wide {
         vec![
             tr!("ACCOUNT", "АККАУНТ"),
             tr!("CHANNEL", "КАНАЛ"),
@@ -267,7 +274,12 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
             "+",
         ]
     };
-    let widths: Vec<_> = (if wide {
+    if chat_column {
+        headers.push(tr!("CHAT", "ЧАТ"));
+    }
+    let widths: Vec<_> = (if chat_column {
+        vec![16, 17, 15, 9, 9, 6, 9, 7, 12]
+    } else if wide {
         vec![18, 19, 17, 11, 11, 7, 10, 7]
     } else if medium {
         vec![19, 23, 23, 14, 13, 8]
@@ -323,6 +335,16 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
                 },
             )));
         }
+        if chat_column {
+            let color = match channel.chat_status {
+                ChatStatus::Joined => Color::Green,
+                ChatStatus::Connecting => Color::Cyan,
+                ChatStatus::Retry(_) => Color::Yellow,
+                ChatStatus::Error => Color::Red,
+                ChatStatus::Disabled => Color::Gray,
+            };
+            cells.push(Cell::from(channel.chat_status.label()).style(Style::default().fg(color)));
+        }
         Row::new(cells)
     });
     frame.render_stateful_widget(
@@ -371,9 +393,15 @@ pub fn render(frame: &mut Frame, dashboard: &Dashboard, state: &mut ViewState) {
                 _ => tr!("Twitch provides the balance. The first points usually arrive after a few minutes.", "Баланс приходит из Twitch. Первые баллы обычно появляются через несколько минут.").into(),
             }
         });
+        let chat = channel.chat_status.label();
+        let chat_error = channel
+            .chat_error
+            .as_ref()
+            .map(|error| format!(": {error}"))
+            .unwrap_or_default();
         tf!(
-            "{} • {} • last successful request: {last}\n{message}",
-            "{} • {} • успешное обращение: {last}\n{message}",
+            "{} • {} • last request: {last}\nChat: {chat}{chat_error}\n{message}",
+            "{} • {} • последнее обращение: {last}\nЧат: {chat}{chat_error}\n{message}",
             account.login.as_deref().unwrap_or(&account.name),
             channel.name
         )
@@ -766,6 +794,43 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     #[test]
+    fn chat_state_and_errors_render_in_narrow_and_wide_terminals() {
+        for width in [80, 140] {
+            let mut model = Dashboard::new(vec![("account".into(), None, vec!["channel".into()])]);
+            model.accounts[0].channels[0].chat_status = ChatStatus::Joined;
+            let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+            let mut view = ViewState::default();
+            terminal
+                .draw(|frame| render(frame, &model, &mut view))
+                .unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(text.contains("Chat: Joined"));
+            if width >= 130 {
+                assert!(text.contains("CHAT"));
+            }
+            model.accounts[0].channels[0].chat_status = ChatStatus::Error;
+            model.accounts[0].channels[0].chat_error = Some("chat unavailable".into());
+            terminal
+                .draw(|frame| render(frame, &model, &mut view))
+                .unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(text.contains("Chat: Error: chat unavailable"));
+        }
+    }
+
+    #[test]
     fn selection_follows_the_channel_when_state_sorting_moves_it() {
         let mut model = Dashboard::new(vec![(
             "user".into(),
@@ -821,8 +886,8 @@ mod tests {
                     editor: crate::control::Editor::new("channel".into()),
                 },
                 Overlay::Settings {
-                    index: 5,
-                    editors: vec![crate::control::Editor::new("value".into()); 6],
+                    index: 7,
+                    editors: vec![crate::control::Editor::new("value".into()); 8],
                 },
                 Overlay::Login {
                     uri: "https://www.twitch.tv/activate".into(),

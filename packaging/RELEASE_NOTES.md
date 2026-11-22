@@ -1,22 +1,26 @@
-First public release of TwFarmer, a Rust terminal client for Twitch channel
-points farming with multiple accounts.
+TwFarmer 0.1.1 adds chat presence while farming. Each active account joins the
+chats of all channels in its shared, personal, or temporary list, including
+offline channels.
 
-- Twitch device-code sign-in; passwords are entered on Twitch.
-- Shared and personal channel lists for each account.
-- Updating interface with balances, bonuses, states, and logs.
-- Menus and commands, up to two concurrent channels per account.
-- `daemon` for saved sessions and a systemd user unit.
-- English and Russian interface, help, and messages. Choose **Language / Язык**
-  in the menu, use `twfarmer language en|ru`, or override a run with `--lang`.
+- Encrypted IRC connection with keepalive, reconnection, and refreshed credentials.
+- A channel that rejects membership does not disconnect the other chats.
+- Chat state and errors in channel details; a `CHAT` column on wide terminals.
+- `chat_presence` is enabled by default and can be changed in **Farming settings >
+  Join chat** or with `settings set --chat-presence false`.
 
-Archives contain the program, English and Russian README and changelog files,
-example configuration, and the MIT license. Linux also includes the systemd unit.
-Session files are excluded.
+Stopping farming, checking balances, or exiting closes the chat connection.
+The program sends no chat messages and does not store incoming messages.
+
+Existing configuration and session files remain compatible. After replacing
+the binary, use the same working directory or `--config` path as before.
+For systemd, replace the installed binary and restart the user service.
+
+StreamElements and other bots maintain separate loyalty balances. Awarding
+points for chat presence depends on the broadcaster's settings; some rules
+require activity or a live stream. The dashboard shows Twitch channel points.
 
 Extract the archive for your system and run `twfarmer` (`twfarmer.exe` on Windows).
-Add an account, set channels, and start farming through the menu.
+Archives include English and Russian documentation, example configuration,
+and the MIT license. Linux also includes a systemd user unit.
 The GitHub Actions Linux build requires glibc 2.35 or newer.
 Archive checksums are in `SHA256SUMS`.
-
-Twitch decides whether to award points. The program uses internal requests
-that can change. See the README for instructions and limitations.
