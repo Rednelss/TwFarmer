@@ -391,7 +391,11 @@ The displayed minutes come from Twitch rather than a local timer.
 
 Claims require Twitch's `CLAIMABLE` status. A full minute counter alone does not
 confirm readiness. Repeated campaigns show the number of rewards and the next
-eligible time when Twitch provides it. GTAVI Launch Celebration, for example,
+eligible time when Twitch provides it. For each account and reward, a granted
+viewing window pauses farming until `nextEligibleAt` or `currentWindow.expiresAt`.
+Without a reset time, a completed window waits for Twitch to report new progress
+or eligibility; no local calendar date is assumed. Other eligible campaigns can
+use the freed slot. GTAVI Launch Celebration, for example,
 requires an hour of viewing on different days for its daily rewards.
 
 Subscription rewards and rewards with extra prerequisites are not watch targets.

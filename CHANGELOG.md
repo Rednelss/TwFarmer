@@ -2,6 +2,16 @@
 
 **English** | [Русский](CHANGELOG.ru.md)
 
+## 0.2.1 (2026-11-22)
+
+- Repeated Drops use each account and reward's viewing window from Twitch.
+  A granted daily reward frees the slot until `nextEligibleAt` or
+  `currentWindow.expiresAt`; missing reset times are shown without guessing a date.
+- Confirmed grants exclude completed single rewards and fully earned repeats
+  from automatic viewing.
+- Regression coverage for independent account/reward windows, missing and expired
+  reset times, and different watch requirements, including 90-minute daily rewards.
+
 ## 0.2.0 (2026-11-22)
 
 - `UPDATED` includes Drops polling for channels without a channel-points balance.

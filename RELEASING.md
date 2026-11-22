@@ -25,7 +25,7 @@
 ## GitHub Release
 
 To release from the GitHub website, first push the checked changes to `main`.
-Open **Releases > Draft a new release**, choose **v0.2.0** as a new tag and
+Open **Releases > Draft a new release**, choose **v0.2.1** as a new tag and
 **main** as its target, enter a title and description, and click **Publish release**.
 For later versions, use a tag that matches `Cargo.toml`.
 Publishing starts the `Release` workflow; saving a draft does not.
@@ -35,11 +35,11 @@ that release. The release is public while the build runs.
 To start a build from the terminal:
 
 Commit the checked changes and push `main`, then create a tag matching the
-package version. For version 0.2.0:
+package version. For version 0.2.1:
 
 ```bash
-git tag -a v0.2.0 -m "TwFarmer v0.2.0"
-git push origin v0.2.0
+git tag -a v0.2.1 -m "TwFarmer v0.2.1"
+git push origin v0.2.1
 ```
 
 The `Release` workflow runs checks on Linux, Windows, and macOS, checks Rust 1.89

@@ -19,6 +19,7 @@ pub const FIELDS: &str = r#"
       }
       self {
         status hasPreconditionsMet currentMinutesWatched currentSubs currentTurboSubs grantCount nextEligibleAt
+        currentWindow { expiresAt }
       }
     }
 "#;
@@ -122,6 +123,13 @@ struct Progress {
     current_turbo_subs: Option<u64>,
     grant_count: u64,
     next_eligible_at: Option<DateTime<Utc>>,
+    current_window: Option<Window>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Window {
+    expires_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -143,6 +151,7 @@ pub enum DropStatus {
     Claimable,
     Claimed,
     Waiting(DateTime<Utc>),
+    AwaitingReset,
     LinkRequired,
     Conditions,
     Unknown,
@@ -248,6 +257,7 @@ impl Drop {
             DropStatus::Claimable => tr!("Ready to claim", "Можно забрать").into(),
             DropStatus::Claimed => tr!("Claimed", "Получено").into(),
             DropStatus::Waiting(_) => tr!("Waiting", "Ожидание").into(),
+            DropStatus::AwaitingReset => tr!("Reset pending", "Ждём сброса").into(),
             DropStatus::LinkRequired => tr!("Link account", "Связать аккаунт").into(),
             DropStatus::Conditions => tr!("Other conditions", "Другие условия").into(),
             DropStatus::Unknown => tr!("Unknown status", "Статус неизвестен").into(),
@@ -266,6 +276,12 @@ impl Drop {
         }
         if let DropStatus::Waiting(at) = self.status {
             text.push_str(&format!("; {} UTC", at.format("%Y-%m-%d %H:%M")));
+        }
+        if self.status == DropStatus::AwaitingReset {
+            text.push_str(tr!(
+                "; Twitch has not provided the next viewing time",
+                "; Twitch не сообщил время следующего просмотра"
+            ));
         }
         text
     }
@@ -354,15 +370,38 @@ impl Campaign {
         if paid && !catalog {
             return None;
         }
+        let window_end = progress
+            .and_then(|p| p.current_window.as_ref())
+            .and_then(|w| w.expires_at);
+        let current_reward_earned = progress.is_some_and(|p| {
+            criteria.repeatable_config.is_some()
+                && p.grant_count > 0
+                && required > 0
+                && p.current_minutes_watched
+                    .is_some_and(|minutes| minutes >= required)
+        });
         let status = match progress {
             Some(p) if p.has_preconditions_met == Some(false) => DropStatus::Conditions,
             Some(p) if p.status == "CLAIMABLE" && !choice_required && !paid => {
                 DropStatus::Claimable
             }
+            Some(p)
+                if p.grant_count > 0
+                    && criteria.repeatable_config.as_ref().is_none_or(|r| {
+                        r.repeatable_times > 0 && p.grant_count >= r.repeatable_times
+                    }) =>
+            {
+                DropStatus::Claimed
+            }
             Some(p) if p.next_eligible_at.is_some_and(|at| at > now) => {
                 DropStatus::Waiting(p.next_eligible_at.unwrap())
             }
             Some(p) if matches!(p.status.as_str(), "CLAIMED" | "FULFILLED") => DropStatus::Claimed,
+            // Twitch can leave IN_PROGRESS and nextEligibleAt null after a daily grant.
+            Some(_) if current_reward_earned && window_end.is_some_and(|at| at > now) => {
+                DropStatus::Waiting(window_end.unwrap())
+            }
+            Some(_) if current_reward_earned && window_end.is_none() => DropStatus::AwaitingReset,
             // Counted watch time confirms progress even when the link flag disagrees.
             Some(p)
                 if p.status == "IN_PROGRESS"
@@ -450,12 +489,19 @@ mod tests {
     }
 
     fn drops(value: Value) -> Vec<Drop> {
+        drops_at(value, "2026-11-22T12:00:00Z".parse().unwrap())
+    }
+
+    fn drops_at(value: Value, now: DateTime<Utc>) -> Vec<Drop> {
         let campaign: Campaign = serde_json::from_value(value).unwrap();
-        campaign.drops(
-            "channel",
-            Some("gta"),
-            "2026-11-22T12:00:00Z".parse().unwrap(),
-        )
+        campaign.drops("channel", Some("gta"), now)
+    }
+
+    fn window_campaign(now: DateTime<Utc>) -> Value {
+        let mut value = campaign();
+        value["startAt"] = json!(now - chrono::Duration::days(1));
+        value["endAt"] = json!(now + chrono::Duration::days(10));
+        value
     }
 
     #[test]
@@ -467,6 +513,130 @@ mod tests {
         assert_eq!(drop.repeats, Some(6));
         assert!(drop.pending());
         assert!(drop.claim_id("123").is_none());
+    }
+
+    #[test]
+    fn granted_daily_reward_waits_for_the_current_window_to_expire() {
+        let now = Utc::now();
+        let mut value = window_campaign(now);
+        let reset = now + chrono::Duration::hours(4);
+        value["rewardGroups"][0]["self"]["grantCount"] = json!(1);
+        value["rewardGroups"][0]["self"]["currentMinutesWatched"] = json!(60);
+        value["rewardGroups"][0]["self"]["currentWindow"] = json!({"expiresAt": reset});
+        let drop = drops_at(value.clone(), now).pop().unwrap();
+        assert_eq!(drop.status, DropStatus::Waiting(reset));
+        assert!(!drop.pending());
+        assert!(drop.claim_id("123").is_none());
+
+        let campaign: Campaign = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            campaign
+                .drop(
+                    &campaign.reward_groups[0],
+                    None,
+                    None,
+                    reset - chrono::Duration::seconds(1),
+                    true
+                )
+                .unwrap()
+                .status,
+            DropStatus::Waiting(reset)
+        );
+        assert!(
+            campaign
+                .drop(&campaign.reward_groups[0], None, None, reset, true)
+                .unwrap()
+                .pending()
+        );
+
+        value["rewardGroups"][0]["self"]["currentMinutesWatched"] = json!(12);
+        assert!(drops_at(value.clone(), now)[0].pending());
+        value["rewardGroups"][0]["self"]["currentMinutesWatched"] = json!(60);
+        value["rewardGroups"][0]["self"]["grantCount"] = json!(0);
+        assert!(drops_at(value.clone(), now)[0].pending());
+        value["rewardGroups"][0]["self"]["grantCount"] = json!(1);
+        value["rewardGroups"][0]["self"]["currentWindow"] = Value::Null;
+        assert_eq!(
+            drops_at(value.clone(), now)[0].status,
+            DropStatus::AwaitingReset
+        );
+        value["rewardGroups"][0]["self"]["nextEligibleAt"] = json!(reset);
+        assert_eq!(
+            drops_at(value.clone(), now)[0].status,
+            DropStatus::Waiting(reset)
+        );
+        value["rewardGroups"][0]["self"]["status"] = json!("CLAIMABLE");
+        assert_eq!(drops_at(value, now)[0].status, DropStatus::Claimable);
+    }
+
+    #[test]
+    fn viewing_windows_are_independent_for_each_account_and_reward() {
+        let now = Utc::now();
+        let mut first_account = window_campaign(now);
+        first_account["rewardGroups"][0]["self"]["grantCount"] = json!(1);
+        first_account["rewardGroups"][0]["self"]["currentMinutesWatched"] = json!(60);
+        let second_reward = first_account["rewardGroups"][0].clone();
+        first_account["rewardGroups"]
+            .as_array_mut()
+            .unwrap()
+            .push(second_reward);
+        first_account["rewardGroups"][1]["id"] = json!("second-reward");
+        first_account["rewardGroups"][0]["self"]["currentWindow"] =
+            json!({"expiresAt": now + chrono::Duration::hours(4)});
+        first_account["rewardGroups"][1]["self"]["currentWindow"] =
+            json!({"expiresAt": now + chrono::Duration::hours(12)});
+        let mut second_account = first_account.clone();
+        second_account["rewardGroups"][0]["self"]["currentWindow"] =
+            json!({"expiresAt": now + chrono::Duration::hours(48)});
+        second_account["rewardGroups"][1]["self"]["currentWindow"] =
+            json!({"expiresAt": now - chrono::Duration::seconds(1)});
+        let first = drops_at(first_account, now);
+        let second = drops_at(second_account, now);
+        assert_eq!(
+            first[0].status,
+            DropStatus::Waiting(now + chrono::Duration::hours(4))
+        );
+        assert_eq!(
+            first[1].status,
+            DropStatus::Waiting(now + chrono::Duration::hours(12))
+        );
+        assert_eq!(
+            second[0].status,
+            DropStatus::Waiting(now + chrono::Duration::hours(48))
+        );
+        assert!(second[1].pending());
+    }
+
+    #[test]
+    fn daily_window_completion_uses_each_rewards_watch_requirement() {
+        let now = Utc::now();
+        let reset = now + chrono::Duration::hours(8);
+        for required in [15, 60, 90, 120] {
+            let mut value = window_campaign(now);
+            value["rewardGroups"][0]["progressCriteria"]["requirements"]["minutesWatched"] =
+                json!(required);
+            value["rewardGroups"][0]["self"]["grantCount"] = json!(1);
+            value["rewardGroups"][0]["self"]["currentWindow"] = json!({"expiresAt": reset});
+            value["rewardGroups"][0]["self"]["currentMinutesWatched"] = json!(required - 1);
+            assert!(
+                drops_at(value.clone(), now)[0].pending(),
+                "Stopped before {required} minutes"
+            );
+            value["rewardGroups"][0]["self"]["currentMinutesWatched"] = json!(required);
+            let drop = drops_at(value, now).pop().unwrap();
+            assert_eq!(drop.required, required);
+            assert_eq!(drop.status, DropStatus::Waiting(reset));
+        }
+    }
+
+    #[test]
+    fn confirmed_grants_complete_single_and_fully_earned_repeat_rewards() {
+        let mut value = campaign();
+        value["rewardGroups"][0]["self"]["grantCount"] = json!(6);
+        assert_eq!(drops(value.clone())[0].status, DropStatus::Claimed);
+        value["rewardGroups"][0]["progressCriteria"]["repeatableConfig"] = Value::Null;
+        value["rewardGroups"][0]["self"]["grantCount"] = json!(1);
+        assert_eq!(drops(value)[0].status, DropStatus::Claimed);
     }
 
     #[test]

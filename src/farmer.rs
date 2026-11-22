@@ -1039,6 +1039,25 @@ mod tests {
     }
 
     #[test]
+    fn completed_daily_window_leaves_the_drops_slot_for_another_campaign() {
+        let mut daily = drop_for("daily", "reward");
+        daily.minutes = Some(60);
+        daily.grants = Some(1);
+        daily.repeats = Some(6);
+        daily.status = DropStatus::Waiting(chrono::Utc::now() + chrono::Duration::hours(4));
+        let results = vec![
+            poll("daily", true, false, vec![daily]),
+            poll("next", true, false, vec![drop_for("next", "reward")]),
+        ];
+        let catalog = catalog_for(&results);
+        for priority in [FarmingPriority::Points, FarmingPriority::Drops] {
+            let selection = select_channels(&results, &[], &catalog, &HashSet::new(), 2, priority);
+            assert_eq!(names(&selection), ["next"]);
+            assert_eq!(selection.drop_channel.as_deref(), Some("next"));
+        }
+    }
+
+    #[test]
     fn no_drops_uses_normal_slots_and_offline_channels_are_excluded() {
         let results = vec![
             poll("offline", false, true, vec![]),
